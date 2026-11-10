@@ -287,12 +287,12 @@ let map, capaMarcas, capaRangos, capaMatch, pinNuevo=null, circNuevo=null;
 
 function iniciarMapa(){
   map=L.map("map",{zoomControl:true}).setView(CFG.CENTRO, CFG.ZOOM);
-  const carto=L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{
-    maxZoom:19, subdomains:"abcd",
-    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-  }).addTo(map);
-  const osm=L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'});
-  L.control.layers({"Mapa claro":carto,"OpenStreetMap":osm},null,{position:"topright"}).addTo(map);
+  // Mapas gratuitos sin clave (OpenStreetMap)
+  const osm=L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+  const hot=L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",{maxZoom:19, subdomains:"abc",
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, estilo HOT'});
+  L.control.layers({"OpenStreetMap":osm,"Humanitario (más claro)":hot},null,{position:"topright"}).addTo(map);
   L.control.scale({imperial:false}).addTo(map);
   capaRangos=L.layerGroup().addTo(map); capaMatch=L.layerGroup().addTo(map); capaMarcas=L.layerGroup().addTo(map);
   map.on("click", e=>{ if(S.vista==="form") moverPin(e.latlng); });

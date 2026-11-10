@@ -11,8 +11,8 @@
 //  Supabase (Project Settings → API). Ver LEEME.md, paso 3.
 //
 window.SP_CONFIG = {
-  SUPABASE_URL: "",        // ej. "https://abcdxyz.supabase.co"
-  SUPABASE_ANON_KEY: "",   // la clave "anon public" (es segura para el navegador)
+  SUPABASE_URL: "https://xkpzugwsaamkprwkqjee.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_c4AMFreKrbuznuYyDWo32A_5sTp2HAL",   // clave pública (segura para el navegador)
 
   CIUDAD: "Querétaro",
   CENTRO: [20.5888, -100.3899],   // centro del mapa (lat, lng)
