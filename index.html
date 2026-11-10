@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Sherlock Paws · Voluntarios</title>
+<meta name="theme-color" content="#5b3a1e">
+<link rel="icon" href="icono-192.png">
+<link rel="apple-touch-icon" href="icono-192.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<link rel="stylesheet" href="estilos.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<header>
+  <img src="logo.jpg" alt="Sherlock Paws">
+  <div class="titulo"><b>Sherlock Paws</b><small id="subtitulo"></small></div>
+  <div class="esp"></div>
+  <button class="btn primario" id="btnNuevo">+ Reportar</button>
+  <button class="btn chico" id="btnSalir" style="display:none" title="Cerrar sesión">Salir</button>
+</header>
+<main>
+  <aside id="panel">
+    <button id="asa" aria-label="Expandir panel"><i></i></button>
+    <nav class="tabs" id="tabs">
+      <button data-tab="lista" class="activo">Reportes <span class="num" id="nLista">0</span></button>
+      <button data-tab="matches">🔎 Coincidencias <span class="num" id="nMatch">0</span></button>
+      <button data-tab="revisar" id="tabRev" style="display:none">📥 Revisar <span class="num" id="nRev">0</span></button>
+    </nav>
+    <section id="vista"></section>
+  </aside>
+  <div id="map"></div>
+  <div id="barraPick">
+    <input id="qDir" type="text" placeholder="Buscar calle, colonia o lugar…">
+    <button class="btn chico" id="btnBuscarDir">Buscar</button>
+    <button class="btn chico" id="btnMiUbic" title="Usar mi ubicación">📍</button>
+  </div>
+  <div id="resultados"></div>
+</main>
+<div id="toast"></div>
+<div id="cargando">Guardando…</div>
+<div id="login">
+  <div class="caja">
+    <img src="logo.jpg" alt="">
+    <h2 style="color:var(--cafe);margin:12px 0 4px">Sherlock Paws</h2>
+    <p style="color:var(--gris);margin:0 0 14px;font-size:14px">Acceso solo para voluntarios invitados.</p>
+    <form id="formLogin">
+      <input id="lCorreo" type="email" placeholder="Correo" autocomplete="email" required>
+      <input id="lPass" type="password" placeholder="Contraseña" autocomplete="current-password" required>
+      <div class="err" id="lErr"></div>
+      <button class="btn primario" style="width:100%" type="submit">Entrar</button>
+    </form>
+    <p class="ayuda" style="margin-top:12px">¿Quieres reportar un animalito? Usa el <a href="reportar.html">formulario público</a>.</p>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
