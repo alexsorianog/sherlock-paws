@@ -10,7 +10,8 @@ const CFG = Object.assign({
   CAJA_BUSQUEDA:[-100.62,20.85,-100.12,20.40],
   RADIO_POR_TAMANO:{ perro:{mini:1,chico:1.5,mediano:2.5,grande:4}, gato:{mini:0.3,chico:0.5,mediano:0.8,grande:1} },
   CRECIMIENTO_DIARIO:0.10, FACTOR_MAXIMO:3, DIAS_MAX_COINCIDENCIA:90,
-  COMPARAR_FOTOS:true
+  COMPARAR_FOTOS:true,
+  CAPTURAS_PARA:"voluntarios"     // "voluntarios" o "admins"
 }, window.SP_CONFIG || {});
 // Compatibilidad con config.js de la versión 1 (radios sin especie)
 if(typeof CFG.RADIO_POR_TAMANO.mini === "number"){
@@ -193,7 +194,10 @@ const DemoStore = {
 const SupaStore = {
   sb:null, user:null,
   async iniciar(){
-    this.sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+    // En el formulario público nunca se usa la sesión de un voluntario: siempre envía como anónimo
+    this.sb = PUBLICO
+      ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {auth:{persistSession:false, autoRefreshToken:false, detectSessionInUrl:false, storageKey:"sp-publico"}})
+      : window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
     if(PUBLICO) return null;
     const { data } = await this.sb.auth.getSession();
     this.user = data.session ? data.session.user : null;
@@ -527,6 +531,11 @@ function vistaForm(){
     ${PUBLICO?"":`<button type="button" class="volver" data-cancelar>← Cancelar</button>`}
     <h2>${S.editId?"Editar reporte":(PUBLICO?"Reportar un perrito o gatito":"Nuevo reporte")}</h2>
     ${PUBLICO?`<p class="ayuda" style="margin:-4px 0 12px">Un voluntario revisará tu reporte antes de publicarlo en el mapa. ¡Gracias por ayudar!</p>`:""}
+    ${puedeCapturas()?`<div class="captura">
+      <b>📸 ¿Viene de Facebook?</b> Sube la captura de la publicación y lleno los datos por ti.
+      <div class="acciones"><label class="btn chico primario">Elegir captura<input type="file" id="fCaptura" accept="image/*" hidden></label></div>
+      ${F.ocrTexto?`<details><summary>Texto leído de la captura</summary><pre>${esc(F.ocrTexto)}</pre></details>`:""}
+    </div>`:""}
     <div class="campo"><div class="seg">
       ${Object.keys(ESPECIES).map(k=>`<button type="button" class="esp ${e===k?"on":""}" data-especie="${k}">${ESPECIES[k].em} ${ESPECIES[k].label}</button>`).join("")}
     </div></div>
@@ -610,6 +619,7 @@ function enlazarForm(){
   if(F.fotoArchivo || F.foto_path){ prev.src = F.fotoArchivo ? URL.createObjectURL(F.fotoArchivo) : Store.urlFoto(F.foto_path); prev.style.display="block"; }
   foto.onchange=()=>{ const f=foto.files[0]; if(!f) return; F.fotoArchivo=f; prev.src=URL.createObjectURL(f); prev.style.display="block"; };
   const dok=v.querySelector("[data-dupok]"); if(dok) dok.onclick=()=>{ F.dupOk=true; guardar(); };
+  const cap=$("#fCaptura"); if(cap) cap.onchange=()=>{ const f=cap.files[0]; if(f) procesarCaptura(f); };
   $("#formRep").onsubmit=e=>{ e.preventDefault(); guardar(); };
 }
 function actualizarCirculo(){ if(circNuevo && S.form) circNuevo.setRadius(Number(S.form.radio_km)*1000); }
@@ -632,6 +642,81 @@ function abrirForm(id, extra){
   else { ponerPin(ll); clearTimeout(geoT); S.form.ubicada=false; const c=$("#fCoords"); if(c) c.textContent="Mueve el pin al lugar exacto 👆"; }
 }
 function cerrarForm(){ quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista = S.sel ? "detalle" : S.tab; render(); }
+
+/* ---------- Capturas de Facebook ---------- */
+function puedeCapturas(){ return !PUBLICO && !!window.SP_Captura && (CFG.CAPTURAS_PARA!=="admins" || S.admin); }
+async function geocodificar(q){
+  const [o,n,e,s]=CFG.CAJA_BUSQUEDA;
+  try{
+    const arr=await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=mx&accept-language=es&viewbox=${o},${n},${e},${s}&bounded=1&q=${encodeURIComponent(q)}`)).json();
+    return arr && arr[0] ? L.latLng(+arr[0].lat, +arr[0].lon) : null;
+  }catch(err){ return null; }
+}
+async function procesarCaptura(file){
+  leerForm(); const F=S.form;
+  let texto="";
+  try{
+    cargando(true,"Leyendo la captura… (la primera vez tarda un poco)");
+    texto=await window.SP_Captura.leerTexto(file, p=>cargando(true,`Leyendo la captura… ${p}%`));
+  }catch(err){ cargando(false); toast("No se pudo leer la captura: "+err.message); return; }
+  cargando(false);
+  if(!S.form) return;
+  const d=window.SP_Captura.parsear(texto, hoyISO());
+  F.ocrTexto=texto.trim();
+  for(const k of ["tipo","especie","tamano","sexo","fecha_evento"]) if(d[k]) F[k]=d[k];
+  for(const k of ["raza","color","senas","nombre_perro","contacto_telefono","contacto_nombre","contacto_notas","fuente_url","zona"]) if(d[k] && !F[k]) F[k]=d[k];
+  if(d.zona) F.zonaManual=true;
+  if(!F.radioTocado) F.radio_km=radioSugerido(F.especie,F.tamano);
+  actualizarCirculo(); S.dups=[];
+  render();
+  let ubic=false;
+  if(d.zonaBusqueda && !F.ubicada){
+    cargando(true,"Buscando la colonia en el mapa…");
+    let ll=await geocodificar(d.zonaBusqueda+", Querétaro");
+    if(!ll && d.zonaBusqueda.includes(",")) ll=await geocodificar(d.zonaBusqueda.split(",").pop().trim()+", Querétaro");
+    cargando(false);
+    if(ll && S.form){ map.setView(ll,16); moverPin(ll); ubic=true; }
+  }
+  const n=d.detectados.length;
+  toast(n ? `Llené ${n} dato${n>1?"s":""} desde la captura. ${ubic?"Revisa que el pin esté en el lugar exacto.":"Marca la ubicación en el mapa."} Revisa todo antes de guardar.` : "No encontré datos claros en la captura; llénalos a mano.");
+  const foto=await abrirRecorte(file);
+  if(foto && S.form){ S.form.fotoArchivo=foto; render(); }
+}
+function abrirRecorte(file){
+  return new Promise(async res=>{
+    let img; const url=URL.createObjectURL(file);
+    try{ img=await cargarImagen(url,false); }catch(e){ URL.revokeObjectURL(url); return res(null); }
+    const ov=document.createElement("div"); ov.id="recorte";
+    ov.innerHTML=`<div class="caja"><b>✂️ Recorta la foto del animal</b>
+      <p class="ayuda">Arrastra el dedo o el mouse sobre la foto del perrito o gatito. Esa será la foto del reporte (y la que compara la IA).</p>
+      <canvas></canvas>
+      <div class="acciones"><button class="btn primario" data-r="ok" disabled>Usar recorte</button>
+      <button class="btn" data-r="todo">Usar captura completa</button><button class="btn borde" data-r="no">Sin foto</button></div></div>`;
+    document.body.appendChild(ov);
+    const cv=ov.querySelector("canvas"), ctx=cv.getContext("2d"), ok=ov.querySelector('[data-r="ok"]');
+    const k=Math.min((Math.min(window.innerWidth,700)-48)/img.width, (window.innerHeight-230)/img.height, 1);
+    cv.width=Math.max(1,Math.round(img.width*k)); cv.height=Math.max(1,Math.round(img.height*k));
+    let sel=null, ini=null;
+    const dibujar=()=>{ ctx.drawImage(img,0,0,cv.width,cv.height);
+      if(sel){ ctx.fillStyle="rgba(0,0,0,.5)"; ctx.fillRect(0,0,cv.width,cv.height);
+        ctx.drawImage(img, sel.x/k, sel.y/k, sel.w/k, sel.h/k, sel.x, sel.y, sel.w, sel.h);
+        ctx.strokeStyle="#c8893f"; ctx.lineWidth=3; ctx.strokeRect(sel.x,sel.y,sel.w,sel.h); } };
+    dibujar();
+    const pos=e=>{ const r=cv.getBoundingClientRect();
+      return {x:Math.max(0,Math.min(cv.width,(e.clientX-r.left)*cv.width/r.width)), y:Math.max(0,Math.min(cv.height,(e.clientY-r.top)*cv.height/r.height))}; };
+    cv.onpointerdown=e=>{ e.preventDefault(); ini=pos(e); sel=null; try{ cv.setPointerCapture(e.pointerId); }catch(_){} };
+    cv.onpointermove=e=>{ if(!ini) return; const p=pos(e); sel={x:Math.min(ini.x,p.x), y:Math.min(ini.y,p.y), w:Math.abs(p.x-ini.x), h:Math.abs(p.y-ini.y)}; dibujar(); };
+    cv.onpointerup=()=>{ ini=null; ok.disabled=!(sel && sel.w>15 && sel.h>15); };
+    const cerrar=v=>{ ov.remove(); URL.revokeObjectURL(url); res(v); };
+    ov.querySelector('[data-r="todo"]').onclick=()=>cerrar(file);
+    ov.querySelector('[data-r="no"]').onclick=()=>cerrar(null);
+    ok.onclick=()=>{
+      const c=document.createElement("canvas"); c.width=Math.round(sel.w/k); c.height=Math.round(sel.h/k);
+      c.getContext("2d").drawImage(img, sel.x/k, sel.y/k, sel.w/k, sel.h/k, 0, 0, c.width, c.height);
+      c.toBlob(b=>cerrar(b ? new File([b],"recorte.jpg",{type:"image/jpeg"}) : file), "image/jpeg", 0.92);
+    };
+  });
+}
 
 async function guardar(){
   leerForm(); const F=S.form;

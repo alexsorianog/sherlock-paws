@@ -175,3 +175,11 @@
 .gracias img{width:130px;border-radius:24px}
 .tabs button{font-size:14px}
 @media (max-width: 820px){ .tabs button{font-size:13px;padding:11px 3px} }
+
+/* ---------- Capturas de Facebook y recorte ---------- */
+.captura{background:#eef3fb;border:1.5px dashed #9db8dd;border-radius:12px;padding:11px;margin-bottom:14px;font-size:14px}
+.captura details{margin-top:8px;font-size:12.5px}
+.captura pre{white-space:pre-wrap;max-height:180px;overflow:auto;background:#fff;border-radius:8px;padding:8px;font-size:12px}
+#recorte{position:fixed;inset:0;z-index:3600;background:rgba(30,20,10,.75);display:flex;align-items:center;justify-content:center;padding:12px}
+#recorte .caja{background:#fff;border-radius:16px;padding:14px;max-width:100%;max-height:100%;overflow:auto;text-align:center}
+#recorte canvas{display:block;margin:8px auto;border-radius:8px;touch-action:none;cursor:crosshair;max-width:100%}
