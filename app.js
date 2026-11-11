@@ -247,6 +247,35 @@ const SupaStore = {
   },
   async avisar(id){ try{ await this.sb.functions.invoke("sp-alertas",{body:{id}}); }catch(e){ console.warn("Alerta no enviada", e); } }
 };
+/* ---------- Adopción: almacenamiento ---------- */
+const DEMO_ADOP="sp_adop_demo_v1", DEMO_SOL="sp_solicitudes_demo_v1";
+Object.assign(DemoStore, {
+  async adopAnimales(){ return this._leer(DEMO_ADOP); },
+  async adopGuardar(id, d){ const arr=this._leer(DEMO_ADOP); let r;
+    if(id){ const i=arr.findIndex(x=>x.id===id); Object.assign(arr[i], d); r=arr[i]; }
+    else { r=Object.assign({id:uuid(), created_at:new Date().toISOString(), created_by:"demo"}, d); arr.unshift(r); }
+    this._guardar(DEMO_ADOP, arr); return r; },
+  async adopBorrar(id){ this._guardar(DEMO_ADOP, this._leer(DEMO_ADOP).filter(x=>x.id!==id)); },
+  async puedeRevisar(){ return true; },
+  async solicitudes(){ return this._leer(DEMO_SOL); },
+  async solicitudActualizar(id, patch){ const arr=this._leer(DEMO_SOL), i=arr.findIndex(x=>x.id===id); Object.assign(arr[i], patch); this._guardar(DEMO_SOL, arr); return arr[i]; },
+  async docUrl(){ return null; },
+  async revisores(){ return []; }, async revisorAgregar(){ return "ok"; }, async revisorQuitar(){}
+});
+Object.assign(SupaStore, {
+  async adopAnimales(){ const { data, error } = await this.sb.from("sp_adopcion_animales").select("*").order("created_at",{ascending:false}); if(error) throw error; return data||[]; },
+  async adopGuardar(id, d){
+    const q = id ? this.sb.from("sp_adopcion_animales").update(d).eq("id",id) : this.sb.from("sp_adopcion_animales").insert(d);
+    const { data, error } = await q.select().single(); if(error) throw error; return data; },
+  async adopBorrar(id){ const { error } = await this.sb.from("sp_adopcion_animales").delete().eq("id",id); if(error) throw error; },
+  async puedeRevisar(){ const { data } = await this.sb.rpc("sp_puede_revisar"); return data===true; },
+  async solicitudes(){ const { data, error } = await this.sb.from("sp_solicitudes").select("*").order("created_at",{ascending:false}).limit(500); if(error) throw error; return data||[]; },
+  async solicitudActualizar(id, patch){ const { data, error } = await this.sb.from("sp_solicitudes").update(patch).eq("id",id).select().single(); if(error) throw error; return data; },
+  async docUrl(path){ const { data, error } = await this.sb.storage.from("sp-documentos").createSignedUrl(path, 600); if(error) throw error; return data.signedUrl; },
+  async revisores(){ const { data, error } = await this.sb.rpc("sp_revisores_listar"); if(error) throw error; return data||[]; },
+  async revisorAgregar(email){ const { data, error } = await this.sb.rpc("sp_revisores_agregar",{p_email:email}); if(error) throw error; return data; },
+  async revisorQuitar(uid){ const { error } = await this.sb.rpc("sp_revisores_quitar",{p_user:uid}); if(error) throw error; }
+});
 const Store = MODO_DEMO ? DemoStore : SupaStore;
 
 /* =====================================================================
@@ -415,13 +444,15 @@ function render(){
     const lista=filtrados(), np=pendientes().length;
     $("#nLista").textContent=lista.length; $("#nMatch").textContent=S.coincid.length; $("#nRev").textContent=np;
     $("#tabRev").style.display = (np || S.tab==="revisar") ? "" : "none";
-    document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("activo", b.dataset.tab===S.tab && ["lista","matches","revisar"].includes(S.vista)));
+    document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("activo", b.dataset.tab===S.tab && ["lista","matches","revisar","adopcion","adop_form","solicitud"].includes(S.vista)));
   }
+  const modoAdop=["adopcion","adop_form","solicitud"].includes(S.vista);
+  if(document.body.classList.contains("adop")!==modoAdop){ document.body.classList.toggle("adop",modoAdop); if(!modoAdop && map) setTimeout(()=>map.invalidateSize(),50); }
   $("#barraPick").style.display = S.vista==="form" ? "flex" : "none";
   if(S.vista!=="form") $("#resultados").style.display="none";
   pintarMapa();
   const v=$("#vista");
-  v.innerHTML = ({lista:()=>vistaLista(filtrados()), matches:vistaMatches, revisar:vistaRevisar, detalle:vistaDetalle, form:vistaForm, gracias:vistaGracias})[S.vista]();
+  v.innerHTML = ({lista:()=>vistaLista(filtrados()), matches:vistaMatches, revisar:vistaRevisar, detalle:vistaDetalle, form:vistaForm, gracias:vistaGracias, adopcion:vistaAdopcion, adop_form:vistaAnimalForm, solicitud:vistaSolicitud})[S.vista]();
   enlazar();
 }
 function fotoMini(r){
@@ -634,6 +665,7 @@ function enlazar(){
   on("[data-rechazar]", b=>confirmar(b, ()=>rechazar(S.sel)));
   on("[data-otro]", ()=>abrirForm(null));
   if(S.vista==="form") enlazarForm();
+  if(["adopcion","adop_form","solicitud"].includes(S.vista)) enlazarAdopcion();
 }
 function enlazarForm(){
   const F=S.form, v=$("#vista");
@@ -982,6 +1014,209 @@ function ficha(r){
   return partes.join("\n");
 }
 
+/* =====================================================================
+   Adopción: catálogo (voluntarios) y solicitudes (admins + revisores)
+   ===================================================================== */
+S.adop = { sub:"animales", animales:[], solicitudes:[], revisores:[], puedeRevisar:false, cargado:false, filtroSol:"activas", form:null, selSol:null };
+const AD_ESTADOS = {disponible:"Disponible", en_proceso:"Adopción en proceso", adoptado:"Adoptado 🏠", pausado:"Pausado (oculto)"};
+const SOL_ESTADOS = {nueva:"Nueva", en_revision:"En revisión", visita:"Visita agendada", aprobada:"Aprobada ✅", rechazada:"Rechazada", cancelada:"Cancelada"};
+const SN = {si:"Sí", no:"No", no_se:"No se sabe"};
+const urlPublica = (hash) => { try{ return new URL("adopta.html"+(hash||""), location.href).href; }catch(e){ return "adopta.html"+(hash||""); } };
+async function cargarAdopcion(){
+  try{
+    const [an, pr] = await Promise.all([Store.adopAnimales(), Store.puedeRevisar().catch(()=>false)]);
+    S.adop.animales=an; S.adop.puedeRevisar=pr;
+    S.adop.solicitudes = pr ? await Store.solicitudes() : [];
+    S.adop.revisores = S.admin && !MODO_DEMO ? await Store.revisores().catch(()=>[]) : [];
+    S.adop.cargado=true;
+  }catch(err){ toast("No se pudo cargar adopción: "+err.message); }
+  if(["adopcion","adop_form","solicitud"].includes(S.vista)) render();
+}
+const fotoAdop = p => Store.urlFoto(p);
+function badgeEstadoAd(a){ const c={disponible:"b-visto",en_proceso:"b-pendiente",adoptado:"b-reunido",pausado:"b-tam"}[a.estado]; return `<span class="badge ${c}">${AD_ESTADOS[a.estado]||a.estado}</span>`; }
+function semaforoHTML(e){
+  if(e.rojos && e.rojos.length) return `<span class="semaforo rojo">🔴 No apto</span>`;
+  const ic={verde:"🟢",amarillo:"🟡",rojo:"🔴"}[e.semaforo]; return `<span class="semaforo ${e.semaforo}">${ic} ${e.puntos}/100</span>`; }
+function evalSol(s){ return window.SP_Adopcion.evaluar(s.respuestas||{}, S.adop.animales.find(a=>a.id===s.animal_id)); }
+
+function vistaAdopcion(){
+  const A=S.adop;
+  if(!window.SP_Adopcion) return `<p class="ayuda">Falta el archivo adopcion-form.js.</p>`;
+  if(!A.cargado) return `<p class="ayuda">Cargando…</p>`;
+  const nuevas=A.solicitudes.filter(x=>x.estado==="nueva").length;
+  let h=`<div class="subtabs">
+    <button class="chip ${A.sub==="animales"?"on":""}" data-sub="animales">🐾 En adopción (${A.animales.filter(a=>a.estado!=="adoptado").length})</button>
+    ${A.puedeRevisar?`<button class="chip ${A.sub==="solicitudes"?"on":""}" data-sub="solicitudes">📨 Solicitudes${nuevas?` (${nuevas} nuevas)`:""}</button>`:""}
+    ${S.admin?`<button class="chip ${A.sub==="revisores"?"on":""}" data-sub="revisores">👥 Revisores</button>`:""}
+    <button class="chip" data-recargar-adop>🔄</button></div>`;
+  if(A.sub==="solicitudes" && A.puedeRevisar) return h+vistaListaSolicitudes();
+  if(A.sub==="revisores" && S.admin) return h+vistaRevisores();
+  h+=`<div class="acciones" style="margin-bottom:10px"><button class="btn primario chico" data-nuevo-animal>+ Agregar animal en adopción</button>
+      <button class="btn chico" data-copiar-pub>🔗 Copiar liga pública</button></div>
+      <p class="ayuda" style="margin-top:0">La página pública <b>adopta.html</b> muestra los animales "Disponibles" y "En proceso", y ahí la gente llena la solicitud.</p>`;
+  if(!A.animales.length) return h+`<div class="vacio"><img src="logo.jpg" alt=""><p>Aún no hay animales en adopción.</p></div>`;
+  const orden={disponible:0,en_proceso:1,pausado:2,adoptado:3};
+  return h+A.animales.slice().sort((a,b)=>orden[a.estado]-orden[b.estado]).map(a=>{
+    const ns=A.solicitudes.filter(x=>x.animal_id===a.id && !["rechazada","cancelada"].includes(x.estado)).length;
+    return `<div class="tarjeta" data-animal="${esc(a.id)}">
+      ${a.fotos&&a.fotos[0]?`<img class="foto" src="${esc(fotoAdop(a.fotos[0]))}" alt="" loading="lazy">`:`<div class="foto">${a.especie==="gato"?"🐈":"🐕"}</div>`}
+      <div class="info"><div class="t1">${esc(a.nombre)} ${badgeEstadoAd(a)}</div>
+      <div class="t2">${a.especie==="gato"?"Gato":"Perro"} · ${esc(TAM.perro[a.tamano]?.label||"")}${a.edad?" · "+esc(a.edad):""}</div>
+      ${A.puedeRevisar&&ns?`<div class="t2">📨 ${ns} solicitud${ns>1?"es":""}</div>`:""}</div></div>`; }).join("");
+}
+function vistaListaSolicitudes(){
+  const A=S.adop, f=A.filtroSol;
+  const grupos={activas:x=>["nueva","en_revision","visita"].includes(x.estado), aprobada:x=>x.estado==="aprobada", rechazada:x=>["rechazada","cancelada"].includes(x.estado), todas:()=>true};
+  const lista=A.solicitudes.filter(grupos[f]);
+  let h=`<div class="filtros">${[["activas","Por atender"],["aprobada","Aprobadas"],["rechazada","Rechazadas"],["todas","Todas"]].map(([k,t])=>`<button class="chip ${f===k?"on":""}" data-fsol="${k}">${t}</button>`).join("")}</div>`;
+  if(!lista.length) return h+`<div class="vacio"><p>No hay solicitudes aquí.</p></div>`;
+  return h+lista.map(x=>{ const e=evalSol(x), an=A.animales.find(a=>a.id===x.animal_id);
+    return `<div class="tarjeta" data-sol="${esc(x.id)}"><div class="info">
+      <div class="t1">${semaforoHTML(e)} ${esc(x.nombre)}</div>
+      <div class="t2">Para: <b>${esc(an?an.nombre:"(sin animal específico)")}</b> · ${SOL_ESTADOS[x.estado]}</div>
+      <div class="t2">${new Date(x.created_at).toLocaleString("es-MX",{dateStyle:"medium",timeStyle:"short"})} · ${esc(e.resumen)}</div></div></div>`; }).join("");
+}
+function vistaRevisores(){
+  const A=S.adop;
+  return `<p class="ayuda" style="margin-top:0">Los <b>administradores</b> siempre pueden revisar solicitudes. Aquí puedes nombrar a <b>voluntarios</b> de confianza para que también las vean (con domicilio, teléfono y documentos).</p>
+    <div class="fila" style="margin-bottom:10px"><input class="buscar" id="revEmail" type="email" placeholder="correo del voluntario" style="margin:0"><button class="btn primario chico" data-rev-agregar>Agregar</button></div>
+    ${A.revisores.length ? A.revisores.map(r=>`<div class="tarjeta" style="cursor:default"><div class="info"><div class="t1">👤 ${esc(r.email)}</div></div><button class="btn chico rojo" data-rev-quitar="${esc(r.user_id)}">Quitar</button></div>`).join("") : `<p class="ayuda">Aún no hay revisores nombrados (además de los administradores).</p>`}`;
+}
+function vistaAnimalForm(){
+  const F=S.adop.form, sel=(id,ops,v)=>`<select id="${id}">${ops.map(([k,t])=>`<option value="${k}" ${v===k?"selected":""}>${t}</option>`).join("")}</select>`;
+  const fotos=(F.fotos||[]).map((p,i)=>`<div class="mini"><img src="${esc(typeof p==="string"?fotoAdop(p):URL.createObjectURL(p))}" alt=""><button type="button" data-quitar-foto="${i}">✕</button></div>`).join("");
+  const conv=[["si","Sí"],["no","No"],["no_se","No se sabe"]];
+  return `<form class="form" id="formAnimal">
+    <button type="button" class="volver" data-volver-adop>← Volver</button>
+    <h2>${F.id?"Editar":"Nuevo animal en adopción"}</h2>
+    <div class="campo"><div class="seg">${Object.keys(ESPECIES).map(k=>`<button type="button" class="esp ${F.especie===k?"on":""}" data-aespecie="${k}">${ESPECIES[k].em} ${ESPECIES[k].label}</button>`).join("")}</div></div>
+    <div class="campo"><label for="aNombre">Nombre *</label><input type="text" id="aNombre" maxlength="60" value="${esc(F.nombre||"")}"></div>
+    <div class="campo"><label>Fotos (hasta 6; la primera es la principal)</label><input type="file" id="aFotos" accept="image/*" multiple><div class="fotos-adop">${fotos}</div></div>
+    <div class="campo"><label for="aSexo">Sexo</label>${sel("aSexo",[["macho","Macho"],["hembra","Hembra"],["desconocido","No se sabe"]],F.sexo)}</div>
+    <div class="campo"><label for="aEdad">Edad aproximada</label><input type="text" id="aEdad" maxlength="40" placeholder="ej. 2 años, 6 meses" value="${esc(F.edad||"")}"></div>
+    <div class="campo"><label>Tamaño</label><div class="tams">${ORDEN_TAM.map(k=>`<button type="button" class="${F.tamano===k?"on":""}" data-atam="${k}"><b>${TAM[F.especie][k].label}</b><small>${TAM[F.especie][k].desc}</small></button>`).join("")}</div></div>
+    <div class="campo"><label for="aRaza">Raza</label><input type="text" id="aRaza" maxlength="80" list="razasA" value="${esc(F.raza||"")}"><datalist id="razasA">${RAZAS[F.especie].map(x=>`<option value="${esc(x)}">`).join("")}</datalist></div>
+    <div class="campo"><label for="aColor">Color</label><input type="text" id="aColor" maxlength="120" value="${esc(F.color||"")}"></div>
+    <div class="campo"><label>Salud</label><div class="opciones">
+      <label class="op"><input type="checkbox" id="aEster" ${F.esterilizado?"checked":""}> <span>Esterilizado</span></label>
+      <label class="op"><input type="checkbox" id="aVac" ${F.vacunado?"checked":""}> <span>Vacunado</span></label>
+      <label class="op"><input type="checkbox" id="aDesp" ${F.desparasitado?"checked":""}> <span>Desparasitado</span></label></div></div>
+    <div class="campo"><label>¿Convive bien con…?</label>
+      <div class="fila" style="flex-wrap:wrap">Niños ${sel("aNinos",conv,F.convive_ninos)} Perros ${sel("aPerros",conv,F.convive_perros)} Gatos ${sel("aGatos",conv,F.convive_gatos)}</div>
+      <p class="ayuda">Si pones "No", la evaluación marcará en rojo a quien tenga niños, perros o gatos según el caso.</p></div>
+    <div class="campo"><label for="aCaracter">Carácter</label><textarea id="aCaracter" maxlength="500" placeholder="juguetón, tranquilo, algo tímido al inicio…">${esc(F.caracter||"")}</textarea></div>
+    <div class="campo"><label for="aNec">Cuidados especiales</label><textarea id="aNec" maxlength="500" placeholder="dieta, medicamento, necesita patio…">${esc(F.necesidades||"")}</textarea></div>
+    <div class="campo"><label for="aDesc">Su historia / descripción</label><textarea id="aDesc" maxlength="1500">${esc(F.descripcion||"")}</textarea></div>
+    <div class="campo"><label for="aZona">Zona donde está</label><input type="text" id="aZona" maxlength="100" value="${esc(F.zona||"")}"></div>
+    <div class="campo"><label for="aEstado">Estado</label>${sel("aEstado",Object.entries(AD_ESTADOS),F.estado)}</div>
+    <div class="acciones"><button type="submit" class="btn primario">${F.id?"Guardar cambios":"Publicar en adopción"}</button></div>
+    ${F.id?`<div class="acciones"><button type="button" class="btn chico" data-copiar-animal>🔗 Copiar liga de ${esc(F.nombre||"")}</button>
+      ${(S.admin || F.created_by===S.user?.id)?`<button type="button" class="btn chico rojo" data-borrar-animal>Eliminar</button>`:""}</div>`:""}
+  </form>`;
+}
+function vistaSolicitud(){
+  const x=S.adop.solicitudes.find(s=>s.id===S.adop.selSol);
+  if(!x) return `<button class="volver" data-volver-adop>← Volver</button><p>Solicitud no encontrada.</p>`;
+  const AD=window.SP_Adopcion, e=evalSol(x), an=S.adop.animales.find(a=>a.id===x.animal_id), r=x.respuestas||{};
+  const tel=telWa(x.telefono), msg=encodeURIComponent(`Hola ${String(x.nombre).split(" ")[0]}, te escribimos de Sherlock Paws por tu solicitud de adopción${an?" de "+an.nombre:""}.`);
+  const lista=(arr,c)=>arr.length?`<ul class="motivos">${arr.map(m=>`<li>${c} ${esc(m)}</li>`).join("")}</ul>`:"";
+  let h=`<div class="detalle"><button class="volver" data-volver-adop>← Volver a solicitudes</button>
+    <h2>${esc(x.nombre)}</h2>
+    <p>${semaforoHTML(e)} <b>${esc(e.resumen)}</b></p>
+    ${e.rojos.length?`<b style="color:var(--rojo)">Motivos para no aprobar</b>${lista(e.rojos,"🔴")}`:""}
+    ${e.amarillos.length?`<b style="color:#8a6400">Para revisar en la llamada o visita</b>${lista(e.amarillos,"🟡")}`:""}
+    ${e.verdes.length?`<details><summary><b style="color:var(--verde)">${e.verdes.length} señales positivas</b></summary>${lista(e.verdes,"🟢")}</details>`:""}
+    <p class="ayuda">La evaluación es una guía automática; la decisión final es de ustedes.</p>
+    <dl class="datos"><dt>Para</dt><dd>${an?`<b>${esc(an.nombre)}</b> (${an.especie==="gato"?"gato":"perro"})`:"Solicitud general"}</dd>
+      <dt>Recibida</dt><dd>${new Date(x.created_at).toLocaleString("es-MX")}</dd>
+      <dt>Teléfono</dt><dd>${esc(x.telefono)}</dd><dt>Correo</dt><dd>${esc(x.email||"—")}</dd>
+      <dt>Firma</dt><dd>${esc(r._firma||"—")} ${r._fecha_aceptacion?`· aceptó condiciones el ${new Date(r._fecha_aceptacion).toLocaleDateString("es-MX")}`:""}</dd></dl>
+    <div class="acciones">${tel?`<a class="btn verde chico" href="https://wa.me/${tel}?text=${msg}" target="_blank" rel="noopener">WhatsApp</a><a class="btn borde chico" href="tel:+${tel}">Llamar</a>`:""}
+      <button class="btn chico" data-doc="ine_path">🪪 Ver identificación</button><button class="btn chico" data-doc="comprobante_path">🏠 Ver comprobante</button></div>
+    <div class="grupo" style="margin-top:12px"><h3>Seguimiento</h3>
+      <div class="campo"><label for="sEstado">Estado</label><select id="sEstado">${Object.entries(SOL_ESTADOS).map(([k,t])=>`<option value="${k}" ${x.estado===k?"selected":""}>${t}</option>`).join("")}</select></div>
+      <div class="campo"><label for="sNotas">Notas internas (llamada, visita, acuerdos)</label><textarea id="sNotas" maxlength="3000">${esc(x.notas||"")}</textarea></div>
+      <div class="acciones"><button class="btn primario chico" data-guardar-sol>Guardar</button>
+      ${an && x.estado==="aprobada" && an.estado!=="adoptado"?`<button class="btn verde chico" data-marcar-adoptado="${esc(an.id)}">🏠 Marcar a ${esc(an.nombre)} como adoptado</button>`:""}</div></div>
+    <div class="respuestas">`;
+  for(const sec of AD.SECCIONES){
+    const ps=sec.preguntas.filter(p=>AD.visible(p,r,an?an.especie:null) && p.id!=="nombre");
+    h+=`<h4>${esc(sec.titulo)}</h4><dl>${ps.map(p=>`<dt>${esc(p.etiqueta)}</dt><dd>${esc(AD.textoRespuesta(p,r[p.id]))}</dd>`).join("")}</dl>`;
+  }
+  return h+`</div></div>`;
+}
+function abrirSolicitud(id){ S.adop.selSol=id; S.vista="solicitud"; try{ history.replaceState(null,"","#s-"+id); }catch(e){} render(); $("#vista").scrollTop=0; }
+function abrirAnimalForm(id){
+  const base = id ? S.adop.animales.find(a=>a.id===id) : null;
+  S.adop.form = base ? Object.assign({}, base, {fotos:[...(base.fotos||[])]}) :
+    {especie:"perro", sexo:"desconocido", tamano:"mediano", estado:"disponible", convive_ninos:"no_se", convive_perros:"no_se", convive_gatos:"no_se", fotos:[]};
+  S.vista="adop_form"; render(); $("#vista").scrollTop=0;
+}
+function leerAnimalForm(){
+  const F=S.adop.form, v=id=>{ const el=$(id); return el?el.value.trim():undefined; }, c=id=>{ const el=$(id); return el?el.checked:undefined; };
+  Object.assign(F,{nombre:v("#aNombre"), sexo:v("#aSexo"), edad:v("#aEdad"), raza:v("#aRaza"), color:v("#aColor"), esterilizado:c("#aEster"), vacunado:c("#aVac"), desparasitado:c("#aDesp"),
+    convive_ninos:v("#aNinos"), convive_perros:v("#aPerros"), convive_gatos:v("#aGatos"), caracter:v("#aCaracter"), necesidades:v("#aNec"), descripcion:v("#aDesc"), zona:v("#aZona"), estado:v("#aEstado")});
+}
+async function guardarAnimal(){
+  leerAnimalForm(); const F=S.adop.form;
+  if(!F.nombre) return toast("Ponle nombre al animalito");
+  cargando(true, "Guardando…");
+  try{
+    const fotos=[];
+    for(const f of F.fotos){ if(typeof f==="string") fotos.push(f); else fotos.push(await Store.subirFoto(await comprimir(f, MODO_DEMO?700:1280, MODO_DEMO?0.7:0.8))); }
+    const d={especie:F.especie, nombre:F.nombre, sexo:F.sexo, edad:F.edad||null, tamano:F.tamano, raza:F.raza||null, color:F.color||null,
+      esterilizado:!!F.esterilizado, vacunado:!!F.vacunado, desparasitado:!!F.desparasitado, convive_ninos:F.convive_ninos, convive_perros:F.convive_perros, convive_gatos:F.convive_gatos,
+      caracter:F.caracter||null, necesidades:F.necesidades||null, descripcion:F.descripcion||null, zona:F.zona||null, fotos, estado:F.estado};
+    const r=await Store.adopGuardar(F.id||null, d);
+    S.adop.animales = F.id ? S.adop.animales.map(a=>a.id===r.id?r:a) : [r, ...S.adop.animales];
+    S.adop.form=null; S.vista="adopcion"; S.adop.sub="animales";
+    toast(F.id?"Cambios guardados":`${r.nombre} ya está publicado en adopción 🐾`); render();
+  }catch(err){ toast("No se pudo guardar: "+err.message); }
+  finally{ cargando(false); }
+}
+function enlazarAdopcion(){
+  const v=$("#vista"), on=(sel,fn)=>v.querySelectorAll(sel).forEach(el=>el.onclick=e=>fn(el,e));
+  on("[data-sub]", b=>{ S.adop.sub=b.dataset.sub; render(); });
+  on("[data-recargar-adop]", ()=>cargarAdopcion());
+  on("[data-fsol]", b=>{ S.adop.filtroSol=b.dataset.fsol; render(); });
+  on("[data-nuevo-animal]", ()=>abrirAnimalForm(null));
+  on("[data-animal]", el=>abrirAnimalForm(el.dataset.animal));
+  on("[data-sol]", el=>abrirSolicitud(el.dataset.sol));
+  on("[data-volver-adop]", ()=>{ S.adop.form=null; S.vista="adopcion"; limpiarHash(); render(); });
+  on("[data-copiar-pub]", async()=>toast(await copiar(urlPublica(""))?"Liga copiada: compártela en Facebook o WhatsApp":"No se pudo copiar"));
+  on("[data-copiar-animal]", async()=>{ const F=S.adop.form; toast(await copiar(`🐾 ${F.nombre} busca hogar\n${urlPublica("#a-"+F.id)}`)?"Liga copiada":"No se pudo copiar"); });
+  on("[data-aespecie]", b=>{ leerAnimalForm(); S.adop.form.especie=b.dataset.aespecie; render(); });
+  on("[data-atam]", b=>{ leerAnimalForm(); S.adop.form.tamano=b.dataset.atam; render(); });
+  on("[data-quitar-foto]", b=>{ leerAnimalForm(); S.adop.form.fotos.splice(+b.dataset.quitarFoto,1); render(); });
+  const af=$("#aFotos"); if(af) af.onchange=()=>{ leerAnimalForm(); const F=S.adop.form; for(const f of af.files){ if(F.fotos.length<6) F.fotos.push(f); } if(af.files.length+F.fotos.length>6) toast("Máximo 6 fotos"); render(); };
+  const fa=$("#formAnimal"); if(fa) fa.onsubmit=e=>{ e.preventDefault(); guardarAnimal(); };
+  on("[data-borrar-animal]", b=>confirmar(b, async()=>{ try{ await Store.adopBorrar(S.adop.form.id); S.adop.animales=S.adop.animales.filter(a=>a.id!==S.adop.form.id); S.adop.form=null; S.vista="adopcion"; toast("Eliminado"); render(); }catch(err){ toast("Error: "+err.message); } }));
+  on("[data-doc]", async b=>{
+    const x=S.adop.solicitudes.find(s=>s.id===S.adop.selSol); if(!x) return;
+    const w=window.open("","_blank");
+    try{ const u=await Store.docUrl(x[b.dataset.doc]); if(!u){ if(w) w.close(); return toast("Los documentos solo se ven con Supabase conectado"); } if(w) w.location=u; else location.href=u; }
+    catch(err){ if(w) w.close(); toast("No se pudo abrir el documento: "+err.message); }
+  });
+  on("[data-guardar-sol]", async()=>{
+    try{ const n=await Store.solicitudActualizar(S.adop.selSol,{estado:$("#sEstado").value, notas:$("#sNotas").value.trim()||null, revisado_por:S.user&&S.user.id!=="demo"?S.user.id:null});
+      S.adop.solicitudes=S.adop.solicitudes.map(s=>s.id===n.id?n:s); toast("Solicitud actualizada"); render(); }
+    catch(err){ toast("Error: "+err.message); }
+  });
+  on("[data-marcar-adoptado]", async b=>{
+    try{ const r=await Store.adopGuardar(b.dataset.marcarAdoptado,{estado:"adoptado"}); S.adop.animales=S.adop.animales.map(a=>a.id===r.id?r:a); toast(`¡${r.nombre} tiene hogar! 🏠🎉`); render(); }
+    catch(err){ toast("Error: "+err.message); }
+  });
+  on("[data-rev-agregar]", async()=>{
+    const em=$("#revEmail").value.trim(); if(!em) return;
+    try{ const r=await Store.revisorAgregar(em);
+      if(r==="no_existe") return toast("No hay ninguna cuenta con ese correo. Créala primero en Supabase.");
+      if(r==="no_voluntario") return toast("Esa cuenta no es voluntaria de Sherlock Paws. Agrégala primero como voluntaria.");
+      S.adop.revisores=await Store.revisores(); toast("Revisor agregado"); render(); }
+    catch(err){ toast("Error: "+err.message); }
+  });
+  on("[data-rev-quitar]", async b=>{ try{ await Store.revisorQuitar(b.dataset.revQuitar); S.adop.revisores=await Store.revisores(); toast("Revisor quitado"); render(); }catch(err){ toast("Error: "+err.message); } });
+}
+
 /* ---------- Panel móvil ---------- */
 function panelEstado(e){ const p=$("#panel"); p.classList.remove("min","max"); if(e!=="mid") p.classList.add(e); setTimeout(()=>map&&map.invalidateSize(),250); }
 function panelEs(e){ const p=$("#panel"); return e==="mid" ? !p.classList.contains("min")&&!p.classList.contains("max") : p.classList.contains(e); }
@@ -1037,6 +1272,8 @@ async function arrancarApp(){
   render();
   const m=/^#r-(.+)$/.exec(location.hash);
   if(m && S.reportes.some(r=>r.id===m[1])) abrirDetalle(m[1]);
+  const ms=/^#s-(.+)$/.exec(location.hash);
+  if(ms){ S.tab="adopcion"; S.vista="adopcion"; await cargarAdopcion(); if(S.adop.solicitudes.some(x=>x.id===ms[1])){ S.adop.sub="solicitudes"; abrirSolicitud(ms[1]); } else render(); }
   if(!MODO_DEMO){
     setInterval(()=>refrescarDatos(false),60000);
     setInterval(()=>{ if(_refrescoPendiente) refrescarDatos(false); },5000);
@@ -1056,6 +1293,7 @@ async function inicio(){
   document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{
     if(S.vista==="form") return toast("Termina o cancela el reporte primero");
     S.tab=b.dataset.tab; S.vista=S.tab; S.sel=null; capaMatch.clearLayers(); limpiarHash(); render();
+    if(S.tab==="adopcion") cargarAdopcion();
   });
   if(typeof L==="undefined"){ document.body.innerHTML='<p style="padding:20px">No se pudo cargar el mapa. Revisa tu conexión a internet y recarga.</p>'; return; }
   if(MODO_DEMO){ S.user=await Store.iniciar(); return arrancarApp(); }
