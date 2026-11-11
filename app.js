@@ -11,7 +11,8 @@ const CFG = Object.assign({
   RADIO_POR_TAMANO:{ perro:{mini:1,chico:1.5,mediano:2.5,grande:4}, gato:{mini:0.3,chico:0.5,mediano:0.8,grande:1} },
   CRECIMIENTO_DIARIO:0.10, FACTOR_MAXIMO:3, DIAS_MAX_COINCIDENCIA:90,
   COMPARAR_FOTOS:true,
-  CAPTURAS_PARA:"voluntarios"     // "voluntarios" o "admins"
+  CAPTURAS_PARA:"voluntarios",    // "voluntarios" o "admins"
+  IA_PARA:"voluntarios"           // quién ve el botón "Mejorar con IA": "voluntarios", "admins" o "nadie"
 }, window.SP_CONFIG || {});
 // Compatibilidad con config.js de la versión 1 (radios sin especie)
 if(typeof CFG.RADIO_POR_TAMANO.mini === "number"){
@@ -187,6 +188,7 @@ const DemoStore = {
   async descartar(p,v){ const d=this._leer(this._kd); d.push({perdido_id:p,visto_id:v}); this._guardar(this._kd,d); },
   async esAdmin(){ return true; },
   async esVoluntario(){ return true; },
+  async leerConIA(){ throw new Error("La IA solo funciona con Supabase conectado (no en modo demo)."); },
   async avisar(){},
   async salir(){}
 };
@@ -229,6 +231,12 @@ const SupaStore = {
   async descartar(p,v){ const { error } = await this.sb.from("sp_descartes").insert({perdido_id:p, visto_id:v}); if(error && error.code!=="23505") throw error; },
   async esAdmin(){ const { data } = await this.sb.from("sp_admins").select("user_id").eq("user_id",this.user.id).maybeSingle(); return !!data; },
   async esVoluntario(){ const { data, error } = await this.sb.rpc("sp_es_voluntario"); if(error) throw error; return data===true; },
+  async leerConIA(imagen){
+    const { data, error } = await this.sb.functions.invoke("sp-ia",{body:{imagen, mime:"image/jpeg", hoy:hoyISO()}});
+    if(error){ let m=error.message; try{ const j=await error.context.json(); if(j && j.error) m=j.error; }catch(_){} throw new Error(m); }
+    if(!data || !data.ok) throw new Error((data && data.error) || "Sin respuesta de la IA");
+    return data;
+  },
   async avisar(id){ try{ await this.sb.functions.invoke("sp-alertas",{body:{id}}); }catch(e){ console.warn("Alerta no enviada", e); } }
 };
 const Store = MODO_DEMO ? DemoStore : SupaStore;
@@ -299,7 +307,7 @@ function iniciarMapa(){
   L.control.layers({"OpenStreetMap":osm,"Humanitario (más claro)":hot},null,{position:"topright"}).addTo(map);
   L.control.scale({imperial:false}).addTo(map);
   capaRangos=L.layerGroup().addTo(map); capaMatch=L.layerGroup().addTo(map); capaMarcas=L.layerGroup().addTo(map);
-  map.on("click", e=>{ if(S.vista==="form") moverPin(e.latlng); });
+  map.on("click", e=>{ if(S.vista==="form"){ if(S.form) S.form.pinAuto=false; moverPin(e.latlng); } });
 }
 function emoji(r){
   if(r.estado==="reunido"||r.estado==="cerrado") return "🏠";
@@ -351,7 +359,7 @@ function ponerPin(latlng){
     icon:L.divIcon({className:"",html:'<div class="pin nuevo"><span>🐾</span></div>',iconSize:[40,40],iconAnchor:[20,40]})}).addTo(map);
   circNuevo=L.circle(latlng,{radius:(S.form?.radio_km||2)*1000,color:"#c8893f",weight:2,dashArray:"6 6",fillColor:"#c8893f",fillOpacity:.12,interactive:false}).addTo(map);
   pinNuevo.on("drag",e=>circNuevo.setLatLng(e.target.getLatLng()));
-  pinNuevo.on("dragend",e=>fijarUbicacion(e.target.getLatLng()));
+  pinNuevo.on("dragend",e=>{ if(S.form) S.form.pinAuto=false; fijarUbicacion(e.target.getLatLng()); });
   fijarUbicacion(latlng);
 }
 function moverPin(latlng){ if(!pinNuevo) return ponerPin(latlng); pinNuevo.setLatLng(latlng); circNuevo.setLatLng(latlng); fijarUbicacion(latlng); }
@@ -380,13 +388,13 @@ async function buscarDireccion(){
     const arr=await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=mx&accept-language=es&viewbox=${o},${n},${e},${s}&bounded=1&q=${encodeURIComponent(q)}`)).json();
     if(!arr.length){ box.innerHTML='<div>Sin resultados. Prueba otra referencia o toca el mapa.</div>'; box.style.display="block"; return; }
     box.innerHTML=arr.map((r,i)=>`<div data-i="${i}">${esc(r.display_name)}</div>`).join(""); box.style.display="block";
-    box.querySelectorAll("[data-i]").forEach(el=>el.onclick=()=>{ const r=arr[+el.dataset.i], ll=L.latLng(+r.lat,+r.lon); map.setView(ll,16); moverPin(ll); box.style.display="none"; });
+    box.querySelectorAll("[data-i]").forEach(el=>el.onclick=()=>{ const r=arr[+el.dataset.i], ll=L.latLng(+r.lat,+r.lon); map.setView(ll,16); if(S.form) S.form.pinAuto=false; moverPin(ll); box.style.display="none"; });
   }catch(err){ box.innerHTML='<div>No se pudo buscar ahora. Toca el mapa para marcar.</div>'; box.style.display="block"; }
 }
 function miUbicacion(){
   if(!navigator.geolocation) return toast("Tu navegador no permite ubicación");
   navigator.geolocation.getCurrentPosition(
-    p=>{ const ll=L.latLng(p.coords.latitude,p.coords.longitude); map.setView(ll,16); if(S.vista==="form") moverPin(ll); },
+    p=>{ const ll=L.latLng(p.coords.latitude,p.coords.longitude); map.setView(ll,16); if(S.vista==="form"){ if(S.form) S.form.pinAuto=false; moverPin(ll); } },
     ()=>toast("No se pudo obtener tu ubicación"), {enableHighAccuracy:true,timeout:10000});
 }
 
@@ -533,7 +541,9 @@ function vistaForm(){
     ${PUBLICO?`<p class="ayuda" style="margin:-4px 0 12px">Un voluntario revisará tu reporte antes de publicarlo en el mapa. ¡Gracias por ayudar!</p>`:""}
     ${puedeCapturas()?`<div class="captura">
       <b>📸 ¿Viene de Facebook?</b> Sube la captura de la publicación y lleno los datos por ti.
-      <div class="acciones"><label class="btn chico primario">Elegir captura<input type="file" id="fCaptura" accept="image/*" hidden></label></div>
+      <div class="acciones"><label class="btn chico primario">${F.capturaArchivo?"Elegir otra captura":"Elegir captura"}<input type="file" id="fCaptura" accept="image/*" hidden></label>
+        ${F.capturaArchivo && puedeIA() ? `<button type="button" class="btn chico ia" data-ia>✨ Mejorar con IA</button>`:""}</div>
+      ${F.capturaArchivo && puedeIA() ? `<p class="ayuda">¿Quedaron datos mal o vacíos? La IA mira el texto y la foto (raza, color) y marca sola la foto del animal.</p>`:""}
       ${F.ocrTexto?`<details><summary>Texto leído de la captura</summary><pre>${esc(F.ocrTexto)}</pre></details>`:""}
     </div>`:""}
     <div class="campo"><div class="seg">
@@ -620,6 +630,7 @@ function enlazarForm(){
   foto.onchange=()=>{ const f=foto.files[0]; if(!f) return; F.fotoArchivo=f; prev.src=URL.createObjectURL(f); prev.style.display="block"; };
   const dok=v.querySelector("[data-dupok]"); if(dok) dok.onclick=()=>{ F.dupOk=true; guardar(); };
   const cap=$("#fCaptura"); if(cap) cap.onchange=()=>{ const f=cap.files[0]; if(f) procesarCaptura(f); };
+  const bia=v.querySelector("[data-ia]"); if(bia) bia.onclick=()=>mejorarConIA();
   $("#formRep").onsubmit=e=>{ e.preventDefault(); guardar(); };
 }
 function actualizarCirculo(){ if(circNuevo && S.form) circNuevo.setRadius(Number(S.form.radio_km)*1000); }
@@ -662,7 +673,7 @@ async function procesarCaptura(file){
   cargando(false);
   if(!S.form) return;
   const d=window.SP_Captura.parsear(texto, hoyISO());
-  F.ocrTexto=texto.trim();
+  F.ocrTexto=texto.trim(); F.capturaArchivo=file;
   for(const k of ["tipo","especie","tamano","sexo","fecha_evento"]) if(d[k]) F[k]=d[k];
   for(const k of ["raza","color","senas","nombre_perro","contacto_telefono","contacto_nombre","contacto_notas","fuente_url","zona"]) if(d[k] && !F[k]) F[k]=d[k];
   if(d.zona) F.zonaManual=true;
@@ -675,14 +686,49 @@ async function procesarCaptura(file){
     let ll=await geocodificar(d.zonaBusqueda+", Querétaro");
     if(!ll && d.zonaBusqueda.includes(",")) ll=await geocodificar(d.zonaBusqueda.split(",").pop().trim()+", Querétaro");
     cargando(false);
-    if(ll && S.form){ map.setView(ll,16); moverPin(ll); ubic=true; }
+    if(ll && S.form){ map.setView(ll,16); moverPin(ll); S.form.pinAuto=true; ubic=true; }
   }
   const n=d.detectados.length;
   toast(n ? `Llené ${n} dato${n>1?"s":""} desde la captura. ${ubic?"Revisa que el pin esté en el lugar exacto.":"Marca la ubicación en el mapa."} Revisa todo antes de guardar.` : "No encontré datos claros en la captura; llénalos a mano.");
   const foto=await abrirRecorte(file);
   if(foto && S.form){ S.form.fotoArchivo=foto; render(); }
 }
-function abrirRecorte(file){
+function puedeIA(){ return !PUBLICO && CFG.IA_PARA!=="nadie" && (CFG.IA_PARA!=="admins" || S.admin); }
+async function mejorarConIA(){
+  leerForm(); const F=S.form; if(!F || !F.capturaArchivo) return;
+  let d;
+  try{
+    cargando(true,"✨ La IA está leyendo la captura…");
+    const blob=await comprimir(F.capturaArchivo,1600,0.85);
+    const b64=(await blobADataURL(blob)).split(",")[1];
+    const r=await Store.leerConIA(b64); d=r.datos;
+    if(typeof r.restantes==="number" && r.restantes<=5) setTimeout(()=>toast(`Te quedan ${r.restantes} lecturas con IA hoy.`),3800);
+  }catch(err){ cargando(false); toast("IA: "+err.message); return; }
+  cargando(false);
+  if(!S.form) return;
+  const map1={tipo:"tipo",especie:"especie",tamano:"tamano",sexo:"sexo",fecha:"fecha_evento",raza:"raza",color:"color",senas:"senas",telefono:"contacto_telefono",contacto_nombre:"contacto_nombre"};
+  let n=0;
+  for(const k in map1){ if(d[k] && !(k==="sexo" && d[k]==="desconocido")){ F[map1[k]]=d[k]; n++; } }
+  if(d.nombre){ F.nombre_perro=d.nombre; n++; }
+  const zona=[d.calle,d.colonia].filter(Boolean).join(", ");
+  if(zona){ F.zona=zona; F.zonaManual=true; n++; }
+  if(d.recompensa && !/recompensa/i.test(F.contacto_notas||"")) F.contacto_notas=[F.contacto_notas,"Ofrecen recompensa"].filter(Boolean).join(" · ");
+  if(!F.radioTocado) F.radio_km=radioSugerido(F.especie,F.tamano);
+  actualizarCirculo(); S.dups=[]; render();
+  let ubic=false;
+  if((d.colonia||d.calle) && (!F.ubicada || F.pinAuto)){
+    cargando(true,"Buscando la ubicación en el mapa…");
+    const mun=d.municipio||"Querétaro";
+    let ll=await geocodificar([d.calle,d.colonia,mun].filter(Boolean).join(", "));
+    if(!ll && d.colonia) ll=await geocodificar(`${d.colonia}, ${mun}`);
+    cargando(false);
+    if(ll && S.form){ map.setView(ll,16); moverPin(ll); S.form.pinAuto=true; ubic=true; }
+  }
+  toast(`✨ La IA llenó ${n} dato${n===1?"":"s"}. ${ubic?"Revisa que el pin esté en el lugar exacto. ":""}Revisa todo antes de guardar.`);
+  const foto=await abrirRecorte(F.capturaArchivo, d.foto_animal);
+  if(foto && S.form){ S.form.fotoArchivo=foto; render(); }
+}
+function abrirRecorte(file, caja){
   return new Promise(async res=>{
     let img; const url=URL.createObjectURL(file);
     try{ img=await cargarImagen(url,false); }catch(e){ URL.revokeObjectURL(url); return res(null); }
@@ -701,6 +747,10 @@ function abrirRecorte(file){
       if(sel){ ctx.fillStyle="rgba(0,0,0,.5)"; ctx.fillRect(0,0,cv.width,cv.height);
         ctx.drawImage(img, sel.x/k, sel.y/k, sel.w/k, sel.h/k, sel.x, sel.y, sel.w, sel.h);
         ctx.strokeStyle="#c8893f"; ctx.lineWidth=3; ctx.strokeRect(sel.x,sel.y,sel.w,sel.h); } };
+    if(Array.isArray(caja) && caja.length===4){
+      sel={x:caja[1]/1000*cv.width, y:caja[0]/1000*cv.height, w:(caja[3]-caja[1])/1000*cv.width, h:(caja[2]-caja[0])/1000*cv.height};
+      ok.disabled=false; ov.querySelector(".ayuda").textContent="La IA marcó la foto del animal. Si no quedó bien, vuelve a arrastrar para ajustarla.";
+    }
     dibujar();
     const pos=e=>{ const r=cv.getBoundingClientRect();
       return {x:Math.max(0,Math.min(cv.width,(e.clientX-r.left)*cv.width/r.width)), y:Math.max(0,Math.min(cv.height,(e.clientY-r.top)*cv.height/r.height))}; };

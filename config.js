@@ -40,4 +40,11 @@ window.SP_CONFIG = {
   // Comparar fotos con IA (gratis, corre en el navegador del voluntario).
   // La primera vez descarga ~14 MB; luego queda guardado. Pon false para apagarlo.
   COMPARAR_FOTOS: true,
+
+  // Quién puede llenar reportes desde capturas de Facebook (gratis, se lee en el celular):
+  // "voluntarios" = todos · "admins" = solo administradores
+  CAPTURAS_PARA: "voluntarios",
+
+  // Botón "✨ Mejorar con IA" (Google Gemini, ver LEEME): "voluntarios", "admins" o "nadie"
+  IA_PARA: "voluntarios",
 };
