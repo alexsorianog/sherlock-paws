@@ -540,11 +540,11 @@ function vistaForm(){
     <h2>${S.editId?"Editar reporte":(PUBLICO?"Reportar un perrito o gatito":"Nuevo reporte")}</h2>
     ${PUBLICO?`<p class="ayuda" style="margin:-4px 0 12px">Un voluntario revisará tu reporte antes de publicarlo en el mapa. ¡Gracias por ayudar!</p>`:""}
     ${puedeCapturas()?`<div class="captura">
-      <b>📸 ¿Viene de Facebook?</b> Sube la captura de la publicación y lleno los datos por ti.
-      <div class="acciones"><label class="btn chico primario">${F.capturaArchivo?"Elegir otra captura":"Elegir captura"}<input type="file" id="fCaptura" accept="image/*" hidden></label>
-        ${F.capturaArchivo && puedeIA() ? `<button type="button" class="btn chico ia" data-ia>✨ Mejorar con IA</button>`:""}</div>
-      ${F.capturaArchivo && puedeIA() ? `<p class="ayuda">¿Quedaron datos mal o vacíos? La IA mira el texto y la foto (raza, color) y marca sola la foto del animal.</p>`:""}
-      ${F.ocrTexto?`<details><summary>Texto leído de la captura</summary><pre>${esc(F.ocrTexto)}</pre></details>`:""}
+      <b>📸 Sube la publicación o el póster</b> (captura de Facebook, foto del cartel…). ${puedeIA()?"La IA lee todo, llena los datos y ubica el pin;":"Leo los datos y ubico el pin;"} tú solo confirmas el recorte del animal.
+      <div class="acciones"><label class="btn chico primario">${F.capturaArchivo?"Subir otra imagen":"📸 Subir imagen"}<input type="file" id="fCaptura" accept="image/*" hidden></label>
+        ${F.capturaArchivo ? `<button type="button" class="btn chico" data-recortar>✂️ ${F.fotoArchivo?"Cambiar recorte":"Recortar foto"}</button>`:""}
+        ${F.capturaArchivo && puedeIA() && F.analisis!=="ia" ? `<button type="button" class="btn chico ia" data-ia>✨ Analizar con IA</button>`:""}</div>
+      ${F.ocrTexto && F.analisis==="lectura"?`<details><summary>Texto leído de la imagen</summary><pre>${esc(F.ocrTexto)}</pre></details>`:""}
     </div>`:""}
     <div class="campo"><div class="seg">
       ${Object.keys(ESPECIES).map(k=>`<button type="button" class="esp ${e===k?"on":""}" data-especie="${k}">${ESPECIES[k].em} ${ESPECIES[k].label}</button>`).join("")}
@@ -563,8 +563,11 @@ function vistaForm(){
       <div class="rango"><input type="range" id="fRadio" min="0.1" max="15" step="0.1" value="${F.radio_km}"><output id="oRadio">${fmtKm(Number(F.radio_km))}</output></div>
       <p class="ayuda">${F.tipo==="resguardo"?"Para animales resguardados el rango no crece: indica la zona donde lo encontraron.":`Sugerido según especie y tamaño; ajústalo si es muy miedoso, muy andariego, etc. Crece ${Math.round(CFG.CRECIMIENTO_DIARIO*100)}% cada día (hasta ${CFG.FACTOR_MAXIMO}×).`}</p></div>`}
     <div class="campo"><label for="fFecha">Fecha</label><input type="date" id="fFecha" value="${esc(F.fecha_evento)}" max="${hoyISO()}"></div>
-    <div class="campo"><label>Foto</label><input type="file" id="fFoto" accept="image/*"><img class="fotoPrev" id="fPrev" alt="">
-      <p class="ayuda">Una foto clara ayuda muchísimo (también sirve una captura de la publicación).</p></div>
+    <div class="campo"><label>Foto ${F.capturaArchivo?"(recorte de la imagen que subiste)":""}</label>
+      <img class="fotoPrev" id="fPrev" alt="">
+      ${F.capturaArchivo
+        ? `<p class="ayuda">${F.fotoArchivo?(F.cajaIA?"La IA eligió esta foto; es la que se publicará.":"Esta es la foto que se publicará."):"Aún no hay recorte."} Usa <b>✂️ ${F.fotoArchivo?"Cambiar recorte":"Recortar foto"}</b> arriba para ajustarla.</p>`
+        : `<input type="file" id="fFoto" accept="image/*"><p class="ayuda">Una foto clara del animal ayuda muchísimo.</p>`}</div>
     ${F.tipo==="perdido"?`<div class="campo"><label for="fNombre">Nombre</label><input type="text" id="fNombre" maxlength="80" value="${esc(F.nombre_perro||"")}"></div>`:""}
     <div class="campo"><label for="fRaza">Raza o tipo</label><input type="text" id="fRaza" maxlength="80" list="razas" value="${esc(F.raza||"")}">
       <datalist id="razas">${RAZAS[e].map(x=>`<option value="${esc(x)}">`).join("")}</datalist></div>
@@ -627,10 +630,11 @@ function enlazarForm(){
   $("#fZona").oninput=()=>{ F.zonaManual=true; };
   const foto=$("#fFoto"), prev=$("#fPrev");
   if(F.fotoArchivo || F.foto_path){ prev.src = F.fotoArchivo ? URL.createObjectURL(F.fotoArchivo) : Store.urlFoto(F.foto_path); prev.style.display="block"; }
-  foto.onchange=()=>{ const f=foto.files[0]; if(!f) return; F.fotoArchivo=f; prev.src=URL.createObjectURL(f); prev.style.display="block"; };
+  if(foto) foto.onchange=()=>{ const f=foto.files[0]; if(!f) return; F.fotoArchivo=f; F.fotoPropia=true; prev.src=URL.createObjectURL(f); prev.style.display="block"; };
   const dok=v.querySelector("[data-dupok]"); if(dok) dok.onclick=()=>{ F.dupOk=true; guardar(); };
   const cap=$("#fCaptura"); if(cap) cap.onchange=()=>{ const f=cap.files[0]; if(f) procesarCaptura(f); };
-  const bia=v.querySelector("[data-ia]"); if(bia) bia.onclick=()=>mejorarConIA();
+  const bia=v.querySelector("[data-ia]"); if(bia) bia.onclick=()=>reanalizarConIA();
+  const brc=v.querySelector("[data-recortar]"); if(brc) brc.onclick=async()=>{ leerForm(); await recortarDesdeCaptura(true); };
   $("#formRep").onsubmit=e=>{ e.preventDefault(); guardar(); };
 }
 function actualizarCirculo(){ if(circNuevo && S.form) circNuevo.setRadius(Number(S.form.radio_km)*1000); }
@@ -656,56 +660,124 @@ function cerrarForm(){ quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vis
 
 /* ---------- Capturas de Facebook ---------- */
 function puedeCapturas(){ return !PUBLICO && !!window.SP_Captura && (CFG.CAPTURAS_PARA!=="admins" || S.admin); }
-async function geocodificar(q){
+const TIPOS_GENERICOS=/^(city|town|state|country|county|municipality|administrative|region|province)$/;
+function dentroDeCaja(lat,lng){ const [o,n,e,s]=CFG.CAJA_BUSQUEDA; return lng>=o && lng<=e && lat>=s && lat<=n; }
+async function geoNominatim(q){
   const [o,n,e,s]=CFG.CAJA_BUSQUEDA;
   try{
-    const arr=await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=mx&accept-language=es&viewbox=${o},${n},${e},${s}&bounded=1&q=${encodeURIComponent(q)}`)).json();
-    return arr && arr[0] ? L.latLng(+arr[0].lat, +arr[0].lon) : null;
+    const arr=await (await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=mx&accept-language=es&viewbox=${o},${n},${e},${s}&bounded=1&q=${encodeURIComponent(q)}`)).json();
+    const r=(arr||[]).find(x=>!TIPOS_GENERICOS.test(x.addresstype||x.type||""));
+    return r ? L.latLng(+r.lat,+r.lon) : null;
   }catch(err){ return null; }
 }
-async function procesarCaptura(file){
-  leerForm(); const F=S.form;
-  let texto="";
+async function geoPhoton(q){
+  const [o,n,e,s]=CFG.CAJA_BUSQUEDA, c=CFG.CENTRO;
   try{
-    cargando(true,"Leyendo la captura… (la primera vez tarda un poco)");
-    texto=await window.SP_Captura.leerTexto(file, p=>cargando(true,`Leyendo la captura… ${p}%`));
-  }catch(err){ cargando(false); toast("No se pudo leer la captura: "+err.message); return; }
+    const j=await (await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lat=${c[0]}&lon=${c[1]}&bbox=${o},${s},${e},${n}`)).json();
+    const f=(j.features||[]).find(x=>{ const [lng,lat]=x.geometry.coordinates; return dentroDeCaja(lat,lng) && !TIPOS_GENERICOS.test((x.properties||{}).type||""); });
+    return f ? L.latLng(f.geometry.coordinates[1], f.geometry.coordinates[0]) : null;
+  }catch(err){ return null; }
+}
+async function geocodificar(q){ return (await geoNominatim(q)) || (await geoPhoton(q)); }
+// Intenta varias combinaciones con dos buscadores gratuitos. Regresa {ll, como} o null.
+async function ubicarDireccion({calle, colonia, municipio, lat, lng}){
+  const mun=municipio||CFG.CIUDAD, consultas=[];
+  if(calle && colonia) consultas.push(`${calle}, ${colonia}, ${mun}`);
+  if(colonia){ consultas.push(`${colonia}, ${mun}`); consultas.push(`${colonia}, ${CFG.CIUDAD}`); consultas.push(`Fraccionamiento ${colonia}, ${mun}`); }
+  if(calle) consultas.push(`${calle}, ${mun}`);
+  for(const q of [...new Set(consultas)]){ const ll=await geocodificar(q); if(ll) return {ll, como:"buscador"}; }
+  if(typeof lat==="number" && typeof lng==="number" && dentroDeCaja(lat,lng)) return {ll:L.latLng(lat,lng), como:"ia"};
+  return null;
+}
+// Coloca el pin (o deja la búsqueda lista para que el voluntario elija)
+async function ponerPinDesdeTexto(datos){
+  const F=S.form; if(!F || (F.ubicada && !F.pinAuto)) return "";
+  if(!datos.calle && !datos.colonia && datos.lat==null) return "";
+  cargando(true,"Buscando la ubicación en el mapa…");
+  const r=await ubicarDireccion(datos);
   cargando(false);
-  if(!S.form) return;
+  if(!S.form) return "";
+  if(r){ map.setView(r.ll, r.como==="ia"?15:16); moverPin(r.ll); S.form.pinAuto=true;
+    return r.como==="ia" ? "📍 Ubicación APROXIMADA (calculada por la IA): revísala y mueve el pin." : "📍 Pin colocado: revisa que esté en el lugar exacto."; }
+  const q=[datos.calle,datos.colonia].filter(Boolean).join(", ");
+  if(q){ $("#qDir").value=q; buscarDireccion(); }
+  return "📍 No encontré el lugar exacto: elige una opción de la lista de arriba del mapa o toca el mapa.";
+}
+// Un solo paso: se sube la imagen → la IA la analiza sola (o la lectura gratuita si no hay IA)
+// → se llenan los datos y el pin → solo se pide confirmar el recorte del animal.
+async function procesarCaptura(file){
+  leerForm(); const F=S.form; if(!F) return;
+  F.capturaArchivo=file; F.cajaIA=null; F.fotoArchivo=null; F.fotoPropia=false; F.analisis=null;
+  let res=null;
+  if(puedeIA()) res=await analizarConIA(true);
+  if(!res) res=await analizarConLectura();
+  if(!res || !S.form) return;
+  await recortarDesdeCaptura(false);
+  toast(res.msg + (S.form && S.form.fotoArchivo && S.form.cajaIA ? " 📷 La IA eligió la foto del animal; si no te gusta, usa ✂️ Cambiar recorte." : ""));
+}
+// Recorta con la caja que propuso la IA (sin preguntar y sin gastar otra consulta)
+async function recorteAutomatico(file, caja){
+  try{
+    const url=URL.createObjectURL(file), img=await cargarImagen(url,false); URL.revokeObjectURL(url);
+    const [y0,x0,y1,x1]=caja, pad=0.01;
+    const sx=Math.max(0,(x0/1000-pad)*img.width), sy=Math.max(0,(y0/1000-pad)*img.height);
+    const sw=Math.min(img.width-sx,((x1-x0)/1000+2*pad)*img.width), sh=Math.min(img.height-sy,((y1-y0)/1000+2*pad)*img.height);
+    if(sw<40 || sh<40) return null;
+    const c=document.createElement("canvas"); c.width=Math.round(sw); c.height=Math.round(sh);
+    c.getContext("2d").drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);
+    const b=await new Promise(r=>c.toBlob(r,"image/jpeg",0.92));
+    return b ? new File([b],"recorte.jpg",{type:"image/jpeg"}) : null;
+  }catch(e){ return null; }
+}
+async function recortarDesdeCaptura(preguntar){
+  const F=S.form; if(!F || !F.capturaArchivo) return;
+  if(!preguntar && F.cajaIA){
+    const auto=await recorteAutomatico(F.capturaArchivo, F.cajaIA);
+    if(auto && S.form){ S.form.fotoArchivo=auto; S.form.fotoPropia=false; render(); return; }
+  }
+  const foto=await abrirRecorte(F.capturaArchivo, F.cajaIA);
+  if(foto && S.form){ S.form.fotoArchivo=foto; S.form.fotoPropia=false; render(); }
+}
+async function analizarConLectura(){
+  const F=S.form; let texto="";
+  try{
+    cargando(true,"Leyendo la imagen… (la primera vez tarda un poco)");
+    texto=await window.SP_Captura.leerTexto(F.capturaArchivo, p=>cargando(true,`Leyendo la imagen… ${p}%`));
+  }catch(err){ cargando(false); toast("No se pudo leer la imagen: "+err.message); return {msg:"Llena los datos a mano."}; }
+  cargando(false);
+  if(!S.form) return null;
   const d=window.SP_Captura.parsear(texto, hoyISO());
-  F.ocrTexto=texto.trim(); F.capturaArchivo=file;
+  F.ocrTexto=texto.trim(); F.analisis="lectura";
   for(const k of ["tipo","especie","tamano","sexo","fecha_evento"]) if(d[k]) F[k]=d[k];
   for(const k of ["raza","color","senas","nombre_perro","contacto_telefono","contacto_nombre","contacto_notas","fuente_url","zona"]) if(d[k] && !F[k]) F[k]=d[k];
   if(d.zona) F.zonaManual=true;
   if(!F.radioTocado) F.radio_km=radioSugerido(F.especie,F.tamano);
-  actualizarCirculo(); S.dups=[];
-  render();
-  let ubic=false;
-  if(d.zonaBusqueda && !F.ubicada){
-    cargando(true,"Buscando la colonia en el mapa…");
-    let ll=await geocodificar(d.zonaBusqueda+", Querétaro");
-    if(!ll && d.zonaBusqueda.includes(",")) ll=await geocodificar(d.zonaBusqueda.split(",").pop().trim()+", Querétaro");
-    cargando(false);
-    if(ll && S.form){ map.setView(ll,16); moverPin(ll); S.form.pinAuto=true; ubic=true; }
-  }
+  actualizarCirculo(); S.dups=[]; render();
+  const z=(d.zonaBusqueda||"").split(",").map(x=>x.trim()).filter(Boolean);
+  const msgPin=await ponerPinDesdeTexto({calle:z.length>1?z[0]:null, colonia:z.length>1?z[z.length-1]:z[0]});
   const n=d.detectados.length;
-  toast(n ? `Llené ${n} dato${n>1?"s":""} desde la captura. ${ubic?"Revisa que el pin esté en el lugar exacto.":"Marca la ubicación en el mapa."} Revisa todo antes de guardar.` : "No encontré datos claros en la captura; llénalos a mano.");
-  const foto=await abrirRecorte(file);
-  if(foto && S.form){ S.form.fotoArchivo=foto; render(); }
+  return {msg: n ? `Llené ${n} dato${n>1?"s":""} (lectura gratuita). ${msgPin||"Marca la ubicación en el mapa."} Revisa todo antes de guardar.` : "No encontré datos claros en la imagen; llénalos a mano."};
 }
-function puedeIA(){ return !PUBLICO && CFG.IA_PARA!=="nadie" && (CFG.IA_PARA!=="admins" || S.admin); }
-async function mejorarConIA(){
-  leerForm(); const F=S.form; if(!F || !F.capturaArchivo) return;
-  let d;
+function puedeIA(){ return !PUBLICO && !MODO_DEMO && CFG.IA_PARA!=="nadie" && (CFG.IA_PARA!=="admins" || S.admin); }
+// automatico=true: si falla, no molesta con error (se usa la lectura gratuita en su lugar)
+async function analizarConIA(automatico){
+  const F=S.form; if(!F || !F.capturaArchivo) return null;
+  let d, aviso="";
   try{
-    cargando(true,"✨ La IA está leyendo la captura…");
+    cargando(true,"✨ La IA está analizando la imagen…");
     const blob=await comprimir(F.capturaArchivo,1600,0.85);
     const b64=(await blobADataURL(blob)).split(",")[1];
     const r=await Store.leerConIA(b64); d=r.datos;
-    if(typeof r.restantes==="number" && r.restantes<=5) setTimeout(()=>toast(`Te quedan ${r.restantes} lecturas con IA hoy.`),3800);
-  }catch(err){ cargando(false); toast("IA: "+err.message); return; }
+    if(typeof r.restantes==="number" && r.restantes<=5) aviso=` Te quedan ${r.restantes} análisis con IA hoy.`;
+  }catch(err){
+    cargando(false);
+    if(automatico){ toast("IA no disponible ("+err.message+"). Uso la lectura gratuita."); await new Promise(r=>setTimeout(r,1200)); }
+    else toast("IA: "+err.message);
+    return null;
+  }
   cargando(false);
-  if(!S.form) return;
+  if(!S.form) return null;
+  F.analisis="ia";
   const map1={tipo:"tipo",especie:"especie",tamano:"tamano",sexo:"sexo",fecha:"fecha_evento",raza:"raza",color:"color",senas:"senas",telefono:"contacto_telefono",contacto_nombre:"contacto_nombre"};
   let n=0;
   for(const k in map1){ if(d[k] && !(k==="sexo" && d[k]==="desconocido")){ F[map1[k]]=d[k]; n++; } }
@@ -714,19 +786,15 @@ async function mejorarConIA(){
   if(zona){ F.zona=zona; F.zonaManual=true; n++; }
   if(d.recompensa && !/recompensa/i.test(F.contacto_notas||"")) F.contacto_notas=[F.contacto_notas,"Ofrecen recompensa"].filter(Boolean).join(" · ");
   if(!F.radioTocado) F.radio_km=radioSugerido(F.especie,F.tamano);
+  F.cajaIA=d.foto_animal||null;
   actualizarCirculo(); S.dups=[]; render();
-  let ubic=false;
-  if((d.colonia||d.calle) && (!F.ubicada || F.pinAuto)){
-    cargando(true,"Buscando la ubicación en el mapa…");
-    const mun=d.municipio||"Querétaro";
-    let ll=await geocodificar([d.calle,d.colonia,mun].filter(Boolean).join(", "));
-    if(!ll && d.colonia) ll=await geocodificar(`${d.colonia}, ${mun}`);
-    cargando(false);
-    if(ll && S.form){ map.setView(ll,16); moverPin(ll); S.form.pinAuto=true; ubic=true; }
-  }
-  toast(`✨ La IA llenó ${n} dato${n===1?"":"s"}. ${ubic?"Revisa que el pin esté en el lugar exacto. ":""}Revisa todo antes de guardar.`);
-  const foto=await abrirRecorte(F.capturaArchivo, d.foto_animal);
-  if(foto && S.form){ S.form.fotoArchivo=foto; render(); }
+  const msgPin=await ponerPinDesdeTexto({calle:d.calle, colonia:d.colonia, municipio:d.municipio, lat:d.lat, lng:d.lng});
+  return {msg:`✨ La IA llenó ${n} dato${n===1?"":"s"}. ${msgPin} Revisa todo antes de guardar.${aviso}`};
+}
+// Botón manual "Analizar con IA" (cuando se usó la lectura gratuita)
+async function reanalizarConIA(){
+  leerForm(); const r=await analizarConIA(false);
+  if(r && S.form){ await recortarDesdeCaptura(false); toast(r.msg + (S.form && S.form.cajaIA ? " 📷 La IA eligió la foto del animal; si no te gusta, usa ✂️ Cambiar recorte." : "")); }
 }
 function abrirRecorte(file, caja){
   return new Promise(async res=>{
@@ -734,10 +802,10 @@ function abrirRecorte(file, caja){
     try{ img=await cargarImagen(url,false); }catch(e){ URL.revokeObjectURL(url); return res(null); }
     const ov=document.createElement("div"); ov.id="recorte";
     ov.innerHTML=`<div class="caja"><b>✂️ Recorta la foto del animal</b>
-      <p class="ayuda">Arrastra el dedo o el mouse sobre la foto del perrito o gatito. Esa será la foto del reporte (y la que compara la IA).</p>
+      <p class="ayuda">Arrastra el dedo o el mouse sobre la foto del perrito o gatito. Solo ese recorte se publica como foto del reporte (la captura completa no se guarda).</p>
       <canvas></canvas>
       <div class="acciones"><button class="btn primario" data-r="ok" disabled>Usar recorte</button>
-      <button class="btn" data-r="todo">Usar captura completa</button><button class="btn borde" data-r="no">Sin foto</button></div></div>`;
+      <button class="btn borde" data-r="no">Sin foto por ahora</button></div></div>`;
     document.body.appendChild(ov);
     const cv=ov.querySelector("canvas"), ctx=cv.getContext("2d"), ok=ov.querySelector('[data-r="ok"]');
     const k=Math.min((Math.min(window.innerWidth,700)-48)/img.width, (window.innerHeight-230)/img.height, 1);
@@ -749,7 +817,7 @@ function abrirRecorte(file, caja){
         ctx.strokeStyle="#c8893f"; ctx.lineWidth=3; ctx.strokeRect(sel.x,sel.y,sel.w,sel.h); } };
     if(Array.isArray(caja) && caja.length===4){
       sel={x:caja[1]/1000*cv.width, y:caja[0]/1000*cv.height, w:(caja[3]-caja[1])/1000*cv.width, h:(caja[2]-caja[0])/1000*cv.height};
-      ok.disabled=false; ov.querySelector(".ayuda").textContent="La IA marcó la foto del animal. Si no quedó bien, vuelve a arrastrar para ajustarla.";
+      ok.disabled=false; ov.querySelector(".ayuda").textContent="La IA marcó la foto del animal. Si no quedó bien, vuelve a arrastrar para ajustarla. Solo este recorte se publica.";
     }
     dibujar();
     const pos=e=>{ const r=cv.getBoundingClientRect();
@@ -758,12 +826,11 @@ function abrirRecorte(file, caja){
     cv.onpointermove=e=>{ if(!ini) return; const p=pos(e); sel={x:Math.min(ini.x,p.x), y:Math.min(ini.y,p.y), w:Math.abs(p.x-ini.x), h:Math.abs(p.y-ini.y)}; dibujar(); };
     cv.onpointerup=()=>{ ini=null; ok.disabled=!(sel && sel.w>15 && sel.h>15); };
     const cerrar=v=>{ ov.remove(); URL.revokeObjectURL(url); res(v); };
-    ov.querySelector('[data-r="todo"]').onclick=()=>cerrar(file);
     ov.querySelector('[data-r="no"]').onclick=()=>cerrar(null);
     ok.onclick=()=>{
       const c=document.createElement("canvas"); c.width=Math.round(sel.w/k); c.height=Math.round(sel.h/k);
       c.getContext("2d").drawImage(img, sel.x/k, sel.y/k, sel.w/k, sel.h/k, 0, 0, c.width, c.height);
-      c.toBlob(b=>cerrar(b ? new File([b],"recorte.jpg",{type:"image/jpeg"}) : file), "image/jpeg", 0.92);
+      c.toBlob(b=>cerrar(b ? new File([b],"recorte.jpg",{type:"image/jpeg"}) : null), "image/jpeg", 0.92);
     };
   });
 }
@@ -785,6 +852,7 @@ async function guardar(){
   cargando(true, F.fotoArchivo?"Subiendo foto…":"Guardando…");
   try{
     let foto_path=F.foto_path||null, huella=F.huella||null;
+    if(F.fotoArchivo && F.fotoArchivo===F.capturaArchivo) F.fotoArchivo=null;   // la captura completa nunca se publica
     if(F.fotoArchivo){
       const blob=await comprimir(F.fotoArchivo, MODO_DEMO?800:1280, MODO_DEMO?0.7:0.75);
       foto_path=await Store.subirFoto(blob);

@@ -74,15 +74,15 @@
   }
 
   function telefono(texto){
-    const cand=[]; const re=/(\+?\d[\d\s().\-]{8,18}\d)/g; let m;
-    while((m=re.exec(texto))){
-      let d=m[1].replace(/\D/g,"");
-      if(d.length===13 && d.startsWith("521")) d=d.slice(3);
-      else if(d.length===12 && d.startsWith("52")) d=d.slice(2);
-      if(d.length!==10) continue;
-      const antes=norm(texto.slice(Math.max(0,m.index-40), m.index));
-      const peso=/(tel|cel|whats|wa\b|llam|contact|comunic|informes|inf\b|numero|📞|☎)/.test(antes)?2:1;
-      cand.push({d, peso, i:m.index});
+    const cand=[];
+    const pats=[/(?:\+?52[\s.\-]?)?(?:1[\s.\-]?)?\(?(\d{3})\)?[\s.\-]?(\d{3})[\s.\-]?(\d{4})(?!\d)/g, /(?<!\d)(\d{2})[\s.\-](\d{4})[\s.\-](\d{4})(?!\d)/g];
+    for(const re of pats){ let m;
+      while((m=re.exec(texto))){
+        const d=(m[1]+m[2]+m[3]); if(d.length!==10) continue;
+        const antes=norm(texto.slice(Math.max(0,m.index-40), m.index));
+        const peso=/(tel|cel|whats|wa\b|llam|contact|comunic|informes|inf\b|numero|📞|☎)/.test(antes)?2:1;
+        cand.push({d, peso, i:m.index});
+      }
     }
     cand.sort((a,b)=>b.peso-a.peso || a.i-b.i);
     return cand.length ? cand[0].d.replace(/(\d{3})(\d{3})(\d{4})/,"$1 $2 $3") : null;
