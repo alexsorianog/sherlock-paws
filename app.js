@@ -189,6 +189,7 @@ const DemoStore = {
   async esAdmin(){ return true; },
   async esVoluntario(){ return true; },
   async leerConIA(){ throw new Error("La IA solo funciona con Supabase conectado (no en modo demo)."); },
+  suscribir(){},
   async avisar(){},
   async salir(){}
 };
@@ -231,6 +232,13 @@ const SupaStore = {
   async descartar(p,v){ const { error } = await this.sb.from("sp_descartes").insert({perdido_id:p, visto_id:v}); if(error && error.code!=="23505") throw error; },
   async esAdmin(){ const { data } = await this.sb.from("sp_admins").select("user_id").eq("user_id",this.user.id).maybeSingle(); return !!data; },
   async esVoluntario(){ const { data, error } = await this.sb.rpc("sp_es_voluntario"); if(error) throw error; return data===true; },
+  suscribir(cb, estado){
+    try{
+      this.sb.channel("sp-reportes")
+        .on("postgres_changes",{event:"*",schema:"public",table:"sp_reportes"},cb)
+        .subscribe(st=>estado && estado(st==="SUBSCRIBED"));
+    }catch(e){ console.warn("Sin tiempo real:",e); }
+  },
   async leerConIA(imagen){
     const { data, error } = await this.sb.functions.invoke("sp-ia",{body:{imagen, mime:"image/jpeg", hoy:hoyISO()}});
     if(error){ let m=error.message; try{ const j=await error.context.json(); if(j && j.error) m=j.error; }catch(_){} throw new Error(m); }
@@ -248,7 +256,7 @@ const S = {
   reportes:[], descartes:new Set(), user:null, admin:false,
   tab:"lista", vista:"lista",          // lista | matches | revisar | form | detalle | gracias
   sel:null, editId:null, form:null, dups:[], coincid:[],
-  f:{ perdido:true, visto:true, resguardo:true, reunidos:false, esp:new Set(["perro","gato"]), tam:new Set(ORDEN_TAM), periodo:"30", rangos:true, q:"" }
+  f:{ perdido:true, visto:true, resguardo:true, reunidos:false, esp:new Set(["perro","gato"]), tam:new Set(ORDEN_TAM), periodo:"todo", rangos:true, q:"" }
 };
 const activos = () => S.reportes.filter(r=>r.estado==="activo");
 const pendientes = () => S.reportes.filter(r=>r.estado==="pendiente");
@@ -441,8 +449,14 @@ function vistaLista(lista){
   h+=`<div class="filtros">${Object.keys(ESPECIES).map(e=>`<button class="chip ${f.esp.has(e)?"on":""}" data-esp="${e}">${ESPECIES[e].em} ${ESPECIES[e].label}s</button>`).join("")}
       ${ORDEN_TAM.map(t=>`<button class="chip ${f.tam.has(t)?"on":""}" data-tam="${t}">${TAM.perro[t].label}</button>`).join("")}</div>`;
   h+=`<div class="filtros" style="align-items:center"><select class="mini" id="periodo">
-        ${[["7","Últimos 7 días"],["30","Últimos 30 días"],["90","Últimos 90 días"],["todo","Todo"]].map(([v,t])=>`<option value="${v}" ${f.periodo===v?"selected":""}>${t}</option>`).join("")}
+        ${[["todo","Todas las fechas"],["7","Últimos 7 días"],["30","Últimos 30 días"],["90","Últimos 90 días"]].map(([v,t])=>`<option value="${v}" ${f.periodo===v?"selected":""}>${t}</option>`).join("")}
       </select>${ch("rangos","◎ Rangos")}</div>`;
+  const visibles=S.reportes.filter(r=>r.estado==="activo" || (S.f.reunidos && r.estado!=="pendiente")).length;
+  const ocultos=Math.max(0, visibles-lista.length);
+  h+=`<div class="filtros" style="justify-content:space-between;align-items:center">
+        <span class="ayuda" style="margin:0">${S.ultimaCarga?`Actualizado ${S.ultimaCarga.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}${S.enVivo?" · en vivo 🟢":""}`:""}</span>
+        ${MODO_DEMO?"":`<button class="chip" id="btnActualizar">🔄 Actualizar</button>`}</div>`;
+  if(ocultos) h+=`<div class="aviso">${ocultos} reporte${ocultos>1?"s":""} oculto${ocultos>1?"s":""} por los filtros. <button class="btn chico" id="btnVerTodos">Ver todos</button></div>`;
   if(!lista.length) return h+`<div class="vacio"><img src="logo.jpg" alt=""><p>${S.reportes.length?"Nada con estos filtros.":"Aún no hay reportes. Toca <b>+ Reportar</b> para crear el primero."}</p></div>`;
   return h+lista.slice().sort((a,b)=>(b.fecha_evento||"").localeCompare(a.fecha_evento||"")||(b.created_at||"").localeCompare(a.created_at||"")).map(tarjeta).join("");
 }
@@ -603,6 +617,8 @@ function enlazar(){
   const per=$("#periodo"); if(per) per.onchange=()=>{ S.f.periodo=per.value; render(); };
   const q=$("#q"); if(q) q.oninput=()=>{ S.f.q=q.value; const pos=q.selectionStart; render(); const nq=$("#q"); nq.focus(); nq.setSelectionRange(pos,pos); };
   const ej=$("#btnEjemplos"); if(ej) ej.onclick=cargarEjemplos;
+  const ba=$("#btnActualizar"); if(ba) ba.onclick=async()=>{ ba.textContent="🔄 Actualizando…"; await refrescarDatos(true); };
+  const vt=$("#btnVerTodos"); if(vt) vt.onclick=()=>{ Object.assign(S.f,{perdido:true,visto:true,resguardo:true,periodo:"todo",q:""}); S.f.esp=new Set(["perro","gato"]); S.f.tam=new Set(ORDEN_TAM); render(); };
   const bh=$("#btnHuellas"); if(bh) bh.onclick=analizarFotosPendientes;
   on(".tarjeta[data-id], .lado[data-id]", el=>{ if(S.vista==="form"){ cerrarForm(); } abrirDetalle(el.dataset.id); });
   on("[data-volver]", ()=>{ S.sel=null; capaMatch.clearLayers(); S.vista=S.tab; limpiarHash(); render(); });
@@ -656,7 +672,7 @@ function abrirForm(id, extra){
   if(base){ ponerPin(ll); map.setView(ll, Math.max(map.getZoom(),14)); }
   else { ponerPin(ll); clearTimeout(geoT); S.form.ubicada=false; const c=$("#fCoords"); if(c) c.textContent="Mueve el pin al lugar exacto 👆"; }
 }
-function cerrarForm(){ quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista = S.sel ? "detalle" : S.tab; render(); }
+function cerrarForm(){ quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista = S.sel ? "detalle" : S.tab; render(); if(_refrescoPendiente) refrescarDatos(false); }
 
 /* ---------- Capturas de Facebook ---------- */
 function puedeCapturas(){ return !PUBLICO && !!window.SP_Captura && (CFG.CAPTURAS_PARA!=="admins" || S.admin); }
@@ -789,7 +805,8 @@ async function analizarConIA(automatico){
   F.cajaIA=d.foto_animal||null;
   actualizarCirculo(); S.dups=[]; render();
   const msgPin=await ponerPinDesdeTexto({calle:d.calle, colonia:d.colonia, municipio:d.municipio, lat:d.lat, lng:d.lng});
-  return {msg:`✨ La IA llenó ${n} dato${n===1?"":"s"}. ${msgPin} Revisa todo antes de guardar.${aviso}`};
+  const viejo = F.fecha_evento && diasDesde(F.fecha_evento)>60 ? ` ⚠️ La fecha quedó ${fmtFecha(F.fecha_evento)}: revisa que sea correcta.` : "";
+  return {msg:`✨ La IA llenó ${n} dato${n===1?"":"s"}. ${msgPin}${viejo} Revisa todo antes de guardar.${aviso}`};
 }
 // Botón manual "Analizar con IA" (cuando se usó la lectura gratuita)
 async function reanalizarConIA(){
@@ -995,6 +1012,15 @@ async function cargarEjemplos(){
 async function cargarDatos(){
   const [reps, desc] = await Promise.all([Store.listar(), Store.listarDescartes()]);
   S.reportes=reps||[]; S.descartes=new Set((desc||[]).map(d=>d.perdido_id+"|"+d.visto_id));
+  S.ultimaCarga=new Date();
+}
+// Vuelve a cargar sin interrumpir a quien está escribiendo o llenando un reporte
+let _refrescoPendiente=false;
+async function refrescarDatos(forzar){
+  if(S.vista==="form" && !forzar){ _refrescoPendiente=true; return; }
+  const a=document.activeElement;
+  if(!forzar && a && a.closest && a.closest("#vista") && /INPUT|TEXTAREA|SELECT/.test(a.tagName)){ _refrescoPendiente=true; return; }
+  try{ await cargarDatos(); _refrescoPendiente=false; render(); }catch(e){ if(forzar) toast("No se pudo actualizar: "+e.message); }
 }
 async function arrancarApp(){
   const lg=$("#login"); if(lg) lg.style.display="none";
@@ -1012,9 +1038,12 @@ async function arrancarApp(){
   const m=/^#r-(.+)$/.exec(location.hash);
   if(m && S.reportes.some(r=>r.id===m[1])) abrirDetalle(m[1]);
   if(!MODO_DEMO){
-    const refrescar=async()=>{ if(S.vista==="form") return; try{ await cargarDatos(); render(); }catch(e){} };
-    setInterval(refrescar,120000);
-    document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") refrescar(); });
+    setInterval(()=>refrescarDatos(false),60000);
+    setInterval(()=>{ if(_refrescoPendiente) refrescarDatos(false); },5000);
+    document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") refrescarDatos(false); });
+    // En vivo: cuando cualquier voluntario guarda o cambia algo, se actualiza en segundos
+    let t=null;
+    Store.suscribir(()=>{ clearTimeout(t); t=setTimeout(()=>refrescarDatos(false),800); }, ok=>{ S.enVivo=ok; if(S.vista==="lista") render(); });
   }
 }
 async function inicio(){
