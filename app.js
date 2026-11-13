@@ -40,10 +40,14 @@ const TIPOS = {
   visto:     {label:"Visto",         verbo:"lo viste",        pin:"visto"},
   resguardo: {label:"En resguardo",  verbo:"lo encontraron",  pin:"resguardo"}
 };
-const RAZAS = {
-  perro:["Mestizo / criollo","Chihuahua","Schnauzer","Poodle / french poodle","Pug","Yorkshire","Pomerania","Shih Tzu","Maltés","Beagle","Cocker","Dachshund (salchicha)","Bulldog francés","Pitbull","Bóxer","Labrador","Golden retriever","Pastor alemán","Pastor belga","Husky","Border collie","Rottweiler","Dálmata","Xoloitzcuintle","Galgo"],
-  gato:["Doméstico / mestizo","Siamés","Persa","Angora","Maine coon","Bengalí","Ragdoll","Esfinge"]
+const RAZAS_BASE = {
+  perro:["Mestizo / criollo","Akita","Basset hound","Beagle","Bichón frisé","Bichón maltés","Border collie","Boston terrier","Bóxer","Bull terrier","Bulldog francés","Bulldog inglés",
+    "Cane corso","Chihuahua","Chow chow","Cocker spaniel","Corgi","Dachshund (salchicha)","Dálmata","Doberman","Fox terrier","Galgo","Golden retriever","Gran danés","Husky siberiano",
+    "Jack Russell terrier","Labrador","Pastor alemán","Pastor australiano","Pastor belga","Pequinés","Pinscher","Pitbull","Pomerania","Poodle / french poodle","Pug","Rottweiler",
+    "San Bernardo","Schnauzer","Shar pei","Shiba inu","Shih Tzu","Weimaraner","Xoloitzcuintle","Yorkshire terrier"],
+  gato:["Doméstico / mestizo","Angora turco","Azul ruso","Bengalí","Bombay","Británico de pelo corto","Esfinge","Himalayo","Maine coon","Persa","Ragdoll","Scottish fold","Siamés"]
 };
+const RAZAS = { perro:RAZAS_BASE.perro.slice().sort((a,b)=>a.localeCompare(b,"es")), gato:RAZAS_BASE.gato.slice().sort((a,b)=>a.localeCompare(b,"es")) };
 const MODO_DEMO = !(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
 
 /* =====================================================================
@@ -405,7 +409,7 @@ let geoT;
 function fijarUbicacion(ll){
   if(!S.form) return;
   S.form.lat=+ll.lat.toFixed(6); S.form.lng=+ll.lng.toFixed(6); S.form.ubicada=true;
-  const c=$("#fCoords"); if(c) c.textContent=`📍 ${S.form.lat}, ${S.form.lng}`;
+  const c=$("#fCoords"); if(c) c.textContent="✅ Ubicación marcada";
   clearTimeout(geoT); geoT=setTimeout(()=>zonaInversa(S.form?.lat,S.form?.lng),700);
 }
 async function zonaInversa(lat,lng){
@@ -447,9 +451,11 @@ function render(){
     document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("activo", b.dataset.tab===S.tab && ["lista","matches","revisar","adopcion","adop_form","solicitud"].includes(S.vista)));
   }
   const modoAdop=["adopcion","adop_form","solicitud"].includes(S.vista);
+  if(modoAdop && S.modo!=="lista"){ S.modoAntesAdop=S.modo; setVista("lista"); }
+  else if(!modoAdop && S.modoAntesAdop && S.vista!=="form"){ setVista(S.modoAntesAdop); S.modoAntesAdop=null; }
   if(document.body.classList.contains("adop")!==modoAdop){ document.body.classList.toggle("adop",modoAdop); if(!modoAdop && map) setTimeout(()=>map.invalidateSize(),50); }
-  $("#barraPick").style.display = S.vista==="form" ? "flex" : "none";
-  if(S.vista!=="form") $("#resultados").style.display="none";
+  $("#barraPick").style.display = (S.vista==="form" && (PUBLICO || S.pick)) ? "flex" : "none";
+  if(S.vista!=="form" || (!PUBLICO && !S.pick)) $("#resultados").style.display="none";
   pintarMapa();
   const v=$("#vista");
   v.innerHTML = ({lista:()=>vistaLista(filtrados()), matches:vistaMatches, revisar:vistaRevisar, detalle:vistaDetalle, form:vistaForm, gracias:vistaGracias, adopcion:vistaAdopcion, adop_form:vistaAnimalForm, solicitud:vistaSolicitud})[S.vista]();
@@ -572,8 +578,8 @@ function vistaDetalle(){
 function vistaForm(){
   const F=S.form, e=F.especie;
   const btnTam=k=>`<button type="button" class="${F.tamano===k?"on":""}" data-tamano="${k}"><b>${TAM[e][k].label}</b><small>${TAM[e][k].desc}</small></button>`;
-  const contactoObligatorio = F.tipo!=="visto";
-  const tituloContacto = {perdido:"Contacto de la familia (obligatorio)", visto:"Quién lo vio (opcional)", resguardo:"Quién lo tiene en resguardo (obligatorio)"}[F.tipo];
+  const contactoObligatorio = PUBLICO && F.tipo!=="visto";
+  const tituloContacto = {perdido:"Contacto de la familia", visto:"Quién lo vio", resguardo:"Quién lo tiene en resguardo"}[F.tipo] + (contactoObligatorio?" (obligatorio)":" (opcional)");
   const pregunta = {perdido:"¿Dónde se perdió?", visto:"¿Dónde lo viste?", resguardo:"¿Dónde lo encontraron?"}[F.tipo];
   let dups="";
   if(S.dups.length) dups=`<div class="dups" id="cajaDups"><b>⚠️ Puede que ya esté registrado:</b>
@@ -600,8 +606,9 @@ function vistaForm(){
       <button type="button" class="resguardo ${F.tipo==="resguardo"?"on":""}" data-tipo="resguardo">🤲 Lo tengo / resguardado</button>
     </div></div>
     <div class="campo"><label>${pregunta}</label>
-      <div class="ubic">Toca el mapa o arrastra el pin 🐾. También puedes buscar una dirección arriba del mapa o usar 📍.
-        <div class="coords" id="fCoords">${F.ubicada?`📍 ${F.lat}, ${F.lng}`:"Aún sin ubicación"}</div></div></div>
+      <div class="ubic ${F.ubicada?"ok":""}">
+        <div class="coords" id="fCoords">${F.ubicada ? `✅ Ubicación marcada${F.pinAuto?" automáticamente (revísala)":""}${F.zona?`: <b>${esc(F.zona)}</b>`:""}` : "Aún sin ubicación"}</div>
+        <button type="button" class="btn ${F.ubicada?"":"primario"}" data-pickmapa style="width:100%;margin-top:8px">📍 ${F.ubicada?"Ver o ajustar en el mapa":"Marcar en el mapa"}</button></div></div>
     <div class="campo"><label for="fZona">Colonia / referencia</label><input type="text" id="fZona" maxlength="200" value="${esc(F.zona||"")}" placeholder="ej. Juriquilla, cerca del parque"></div>
     <div class="campo"><label>Tamaño</label><div class="tams">${ORDEN_TAM.map(btnTam).join("")}</div></div>
     ${PUBLICO?"":`<div class="campo"><label>Rango de búsqueda</label>
@@ -612,10 +619,11 @@ function vistaForm(){
       <img class="fotoPrev" id="fPrev" alt="">
       ${F.capturaArchivo
         ? `<p class="ayuda">${F.fotoArchivo?(F.cajaIA?"La IA eligió esta foto; es la que se publicará.":"Esta es la foto que se publicará."):"Aún no hay recorte."} Usa <b>✂️ ${F.fotoArchivo?"Cambiar recorte":"Recortar foto"}</b> arriba para ajustarla.</p>`
-        : `<input type="file" id="fFoto" accept="image/*"><p class="ayuda">Una foto clara del animal ayuda muchísimo.</p>`}</div>
+        : (puedeCapturas() && !S.editId
+            ? `<p class="ayuda">Usa <b>📸 Subir imagen</b> arriba: sirve tanto para una foto del animal como para una captura o póster.</p>`
+            : `<input type="file" id="fFoto" accept="image/*"><p class="ayuda">Una foto clara del animal ayuda muchísimo.</p>`)}</div>
     ${F.tipo==="perdido"?`<div class="campo"><label for="fNombre">Nombre</label><input type="text" id="fNombre" maxlength="80" value="${esc(F.nombre_perro||"")}"></div>`:""}
-    <div class="campo"><label for="fRaza">Raza o tipo</label><input type="text" id="fRaza" maxlength="80" list="razas" value="${esc(F.raza||"")}">
-      <datalist id="razas">${RAZAS[e].map(x=>`<option value="${esc(x)}">`).join("")}</datalist></div>
+    <div class="campo"><label for="fRaza">Raza o tipo</label>${campoAuto("fRaza", F.raza, "Escribe o elige de la lista")}</div>
     <div class="campo"><label for="fColor">Color(es)</label><input type="text" id="fColor" maxlength="120" value="${esc(F.color||"")}" placeholder="ej. negro con café, pecho blanco"></div>
     <div class="campo"><label for="fSexo">Sexo</label><select id="fSexo">${[["desconocido","No se sabe"],["macho","Macho"],["hembra","Hembra"]].map(([v,t])=>`<option value="${v}" ${F.sexo===v?"selected":""}>${t}</option>`).join("")}</select></div>
     <div class="campo"><label for="fSenas">Señas particulares</label><textarea id="fSenas" maxlength="1000" placeholder="collar rojo, placa, cojea, oreja caída, muy asustadizo…">${esc(F.senas||"")}</textarea></div>
@@ -624,6 +632,7 @@ function vistaForm(){
       <div class="campo"><label for="fCTel">Teléfono / WhatsApp</label><input type="tel" id="fCTel" maxlength="20" value="${esc(F.contacto_telefono||"")}" placeholder="10 dígitos"${contactoObligatorio?" required":""}></div>
       <div class="campo"><label for="fCNotas">Notas de contacto</label><input type="text" id="fCNotas" maxlength="200" value="${esc(F.contacto_notas||"")}" placeholder="horario, recompensa, etc."></div>
     </div>
+    ${PUBLICO?"":`<p class="ayuda" style="margin-top:-6px">Si la publicación no trae teléfono, basta con el nombre de quien publicó o la liga de Facebook.</p>`}
     <div class="campo"><label for="fFuente">Liga de la publicación (Facebook, grupo, etc.)</label><input type="url" id="fFuente" maxlength="500" value="${esc(F.fuente_url||"")}" placeholder="https://facebook.com/…"></div>
     ${PUBLICO?`<div class="campo oculto" aria-hidden="true"><label>Sitio web</label><input type="text" id="fWeb" tabindex="-1" autocomplete="off"></div>
       <div class="campo"><label class="consent"><input type="checkbox" id="fConsent" ${F.consent?"checked":""}> <span>Acepto que los voluntarios de Sherlock Paws vean estos datos de contacto para ayudar a reunir al animal con su familia.</span></label></div>`:""}
@@ -635,6 +644,31 @@ function vistaGracias(){
   return `<div class="gracias"><img src="logo.jpg" alt=""><h2 style="color:var(--cafe)">¡Gracias! 🐾</h2>
     <p>Recibimos tu reporte. Un voluntario lo revisará y, si encontramos una coincidencia, te contactaremos.</p>
     <button class="btn primario" data-otro>Hacer otro reporte</button></div>`;
+}
+
+/* ---------- Autocompletado (razas) ---------- */
+function campoAuto(id, valor, ph){
+  return `<div class="auto"><input type="text" id="${id}" maxlength="80" value="${esc(valor||"")}" placeholder="${esc(ph||"")}" autocomplete="off"><div class="sugerencias" id="${id}_sug"></div></div>`;
+}
+function enlazarAuto(id, opciones){
+  const inp=$("#"+id), box=$("#"+id+"_sug"); if(!inp||!box) return;
+  const n=t=>String(t||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const pintar=()=>{
+    const q=n(inp.value.trim());
+    const empieza=opciones.filter(o=>!q || n(o).startsWith(q)), contiene=q?opciones.filter(o=>!n(o).startsWith(q) && n(o).includes(q)):[];
+    const lista=[...empieza,...contiene];
+    const otra = q && !opciones.some(o=>n(o)===q);
+    if(!lista.length && !otra){ box.style.display="none"; return; }
+    box.innerHTML=lista.map(o=>`<div data-op="${esc(o)}">${esc(o)}</div>`).join("") + (otra ? `<div class="otra">Usar «${esc(inp.value.trim())}»</div>`:"");
+    box.style.display="block";
+  };
+  inp.addEventListener("focus",pintar); inp.addEventListener("input",pintar);
+  inp.addEventListener("blur",()=>setTimeout(()=>{ box.style.display="none"; },180));
+  box.addEventListener("mousedown",e=>{
+    const d=e.target.closest("[data-op], .otra"); if(!d) return; e.preventDefault();
+    if(d.dataset.op) inp.value=d.dataset.op;
+    box.style.display="none"; inp.blur(); inp.dispatchEvent(new Event("change",{bubbles:true}));
+  });
 }
 
 /* =====================================================================
@@ -664,12 +698,14 @@ function enlazar(){
   on("[data-aprobar]", ()=>aprobar(S.sel));
   on("[data-rechazar]", b=>confirmar(b, ()=>rechazar(S.sel)));
   on("[data-otro]", ()=>abrirForm(null));
-  if(S.vista==="form") enlazarForm();
+  if(S.vista==="form"){ enlazarForm(); enlazarAuto("fRaza", RAZAS[S.form.especie]); }
   if(["adopcion","adop_form","solicitud"].includes(S.vista)) enlazarAdopcion();
+  if(S.vista==="adop_form" && S.adop.form) enlazarAuto("aRaza", RAZAS[S.adop.form.especie]);
 }
 function enlazarForm(){
   const F=S.form, v=$("#vista");
   const c=v.querySelector("[data-cancelar]"); if(c) c.onclick=()=>cerrarForm();
+  const pk=v.querySelector("[data-pickmapa]"); if(pk) pk.onclick=()=>entrarAPick();
   v.querySelectorAll("[data-especie]").forEach(b=>b.onclick=()=>{ leerForm(); F.especie=b.dataset.especie; if(!F.radioTocado) F.radio_km=radioSugerido(F.especie,F.tamano); actualizarCirculo(); S.dups=[]; render(); });
   v.querySelectorAll("[data-tipo]").forEach(b=>b.onclick=()=>{ leerForm(); F.tipo=b.dataset.tipo; S.dups=[]; render(); });
   v.querySelectorAll("[data-tamano]").forEach(b=>b.onclick=()=>{ leerForm(); F.tamano=b.dataset.tamano; if(!F.radioTocado) F.radio_km=radioSugerido(F.especie,F.tamano); actualizarCirculo(); render(); });
@@ -699,12 +735,36 @@ function abrirForm(id, extra){
     especie:"perro", tipo:"perdido", tamano:"mediano", radio_km:radioSugerido("perro","mediano"), fecha_evento:hoyISO(), sexo:"desconocido", lat:null, lng:null
   };
   S.vista="form"; if(capaMatch) capaMatch.clearLayers();
-  panelEstado("mid"); render();
+  if(!S.modoAntesForm) S.modoAntesForm=S.modo||"ambos";
+  setVista(PUBLICO?"ambos":"lista"); render();
   const ll = base ? L.latLng(base.lat,base.lng) : map.getCenter();
   if(base){ ponerPin(ll); map.setView(ll, Math.max(map.getZoom(),14)); }
-  else { ponerPin(ll); clearTimeout(geoT); S.form.ubicada=false; const c=$("#fCoords"); if(c) c.textContent="Mueve el pin al lugar exacto 👆"; }
+  else { ponerPin(ll); clearTimeout(geoT); S.form.ubicada=false; const c=$("#fCoords"); if(c) c.textContent="Aún sin ubicación"; }
 }
-function cerrarForm(){ quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista = S.sel ? "detalle" : S.tab; render(); if(_refrescoPendiente) refrescarDatos(false); }
+function cerrarForm(){ salirDePick(); quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista = S.sel ? "detalle" : S.tab; restaurarModo(); render(); if(_refrescoPendiente) refrescarDatos(false); }
+function restaurarModo(){ if(S.modoAntesForm){ setVista(S.modoAntesForm); S.modoAntesForm=null; } }
+// Paso "marcar en el mapa": se ve solo el mapa con una barra para confirmar
+function entrarAPick(){
+  leerForm(); const F=S.form; if(!F) return;
+  S.pick={lat:F.lat, lng:F.lng, ubicada:F.ubicada};
+  document.body.classList.add("pick"); setVista("mapa");
+  $("#barraConfirm").style.display="flex"; $("#barraPick").style.display="flex";
+  if(pinNuevo){ map.setView(pinNuevo.getLatLng(), Math.max(map.getZoom(), F.ubicada?16:13)); }
+  if(!F.ubicada && (F.busquedaPendiente||F.zona)){ $("#qDir").value=F.busquedaPendiente||F.zona; buscarDireccion(); }
+}
+function salirDePick(){ S.pick=null; document.body.classList.remove("pick"); const b=$("#barraConfirm"); if(b) b.style.display="none"; $("#resultados").style.display="none"; if(!PUBLICO) $("#barraPick").style.display="none"; }
+function confirmarUbicacion(){
+  const F=S.form; if(!F) return salirDePick();
+  if(pinNuevo){ fijarUbicacion(pinNuevo.getLatLng()); }
+  F.ubicada=true; F.busquedaPendiente=null;
+  salirDePick(); setVista(PUBLICO?"ambos":"lista"); render();
+  toast("📍 Ubicación confirmada");
+}
+function cancelarUbicacion(){
+  const F=S.form, P=S.pick;
+  if(F && P){ F.ubicada=P.ubicada; if(P.lat!=null){ const ll=L.latLng(P.lat,P.lng); if(pinNuevo){ pinNuevo.setLatLng(ll); circNuevo.setLatLng(ll); } F.lat=P.lat; F.lng=P.lng; } }
+  salirDePick(); setVista(PUBLICO?"ambos":"lista"); render();
+}
 
 /* ---------- Capturas de Facebook ---------- */
 function puedeCapturas(){ return !PUBLICO && !!window.SP_Captura && (CFG.CAPTURAS_PARA!=="admins" || S.admin); }
@@ -747,9 +807,8 @@ async function ponerPinDesdeTexto(datos){
   if(!S.form) return "";
   if(r){ map.setView(r.ll, r.como==="ia"?15:16); moverPin(r.ll); S.form.pinAuto=true;
     return r.como==="ia" ? "📍 Ubicación APROXIMADA (calculada por la IA): revísala y mueve el pin." : "📍 Pin colocado: revisa que esté en el lugar exacto."; }
-  const q=[datos.calle,datos.colonia].filter(Boolean).join(", ");
-  if(q){ $("#qDir").value=q; buscarDireccion(); }
-  return "📍 No encontré el lugar exacto: elige una opción de la lista de arriba del mapa o toca el mapa.";
+  S.form.busquedaPendiente=[datos.calle,datos.colonia].filter(Boolean).join(", ");
+  return "📍 No encontré el lugar exacto: toca «Marcar en el mapa» para ubicarlo.";
 }
 // Un solo paso: se sube la imagen → la IA la analiza sola (o la lectura gratuita si no hay IA)
 // → se llenan los datos y el pin → solo se pide confirmar el recorte del animal.
@@ -886,8 +945,12 @@ function abrirRecorte(file, caja){
 
 async function guardar(){
   leerForm(); const F=S.form;
-  if(!F.ubicada) return toast("Mueve el pin o toca el mapa en el lugar exacto");
-  if(F.tipo!=="visto" && !F.contacto_telefono) return toast("El teléfono de contacto es obligatorio para este tipo de reporte");
+  if(!F.ubicada) return toast(PUBLICO?"Mueve el pin o toca el mapa en el lugar exacto":"Falta la ubicación: toca «📍 Marcar en el mapa»");
+  if(PUBLICO && F.tipo!=="visto" && !F.contacto_telefono) return toast("El teléfono de contacto es obligatorio para este tipo de reporte");
+  if(!PUBLICO && F.tipo!=="visto" && !F.contacto_telefono && !F.contacto_nombre && !F.fuente_url && !F.sinContactoOk){
+    F.sinContactoOk=true;
+    return toast("No hay teléfono, nombre ni liga de la publicación. Si de verdad no hay datos, toca Guardar otra vez.");
+  }
   if(PUBLICO && F.contacto_telefono && !F.consent) return toast("Marca la casilla de consentimiento para compartir tu contacto");
   if(F.fuente_url && !/^https?:\/\//i.test(F.fuente_url)) F.fuente_url="https://"+F.fuente_url;
   if(!PUBLICO && !S.editId && !F.dupOk){
@@ -930,7 +993,7 @@ async function guardar(){
     let r;
     if(S.editId){ r=await Store.actualizar(S.editId, reg); S.reportes=S.reportes.map(x=>x.id===r.id?r:x); Store.avisar(r.id); }
     else { r=await Store.crear(reg); S.reportes.push(r); Store.avisar(r.id); }
-    quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista=S.tab;
+    quitarPin(); S.form=null; S.editId=null; S.dups=[]; S.vista=S.tab; restaurarModo();
     calcularCoincidencias();
     const n=S.coincid.filter(m=>m.p.id===r.id||m.v.id===r.id).length;
     toast(n ? `Guardado. ¡Hay ${n} posible${n>1?"s":""} coincidencia${n>1?"s":""}! 🔎` : "Reporte guardado");
@@ -1095,7 +1158,7 @@ function vistaAnimalForm(){
     <div class="campo"><label for="aSexo">Sexo</label>${sel("aSexo",[["macho","Macho"],["hembra","Hembra"],["desconocido","No se sabe"]],F.sexo)}</div>
     <div class="campo"><label for="aEdad">Edad aproximada</label><input type="text" id="aEdad" maxlength="40" placeholder="ej. 2 años, 6 meses" value="${esc(F.edad||"")}"></div>
     <div class="campo"><label>Tamaño</label><div class="tams">${ORDEN_TAM.map(k=>`<button type="button" class="${F.tamano===k?"on":""}" data-atam="${k}"><b>${TAM[F.especie][k].label}</b><small>${TAM[F.especie][k].desc}</small></button>`).join("")}</div></div>
-    <div class="campo"><label for="aRaza">Raza</label><input type="text" id="aRaza" maxlength="80" list="razasA" value="${esc(F.raza||"")}"><datalist id="razasA">${RAZAS[F.especie].map(x=>`<option value="${esc(x)}">`).join("")}</datalist></div>
+    <div class="campo"><label for="aRaza">Raza</label>${campoAuto("aRaza", F.raza, "Escribe o elige de la lista")}</div>
     <div class="campo"><label for="aColor">Color</label><input type="text" id="aColor" maxlength="120" value="${esc(F.color||"")}"></div>
     <div class="campo"><label>Salud</label><div class="opciones">
       <label class="op"><input type="checkbox" id="aEster" ${F.esterilizado?"checked":""}> <span>Esterilizado</span></label>
@@ -1218,8 +1281,16 @@ function enlazarAdopcion(){
 }
 
 /* ---------- Panel móvil ---------- */
-function panelEstado(e){ const p=$("#panel"); p.classList.remove("min","max"); if(e!=="mid") p.classList.add(e); setTimeout(()=>map&&map.invalidateSize(),250); }
-function panelEs(e){ const p=$("#panel"); return e==="mid" ? !p.classList.contains("min")&&!p.classList.contains("max") : p.classList.contains(e); }
+// Modos de vista: "mapa" (solo mapa), "ambos" (mapa + lista) y "lista" (pantalla completa)
+const MODOS={min:"mapa",mid:"ambos",max:"lista"};
+function setVista(m, recordar){
+  document.body.classList.remove("v-mapa","v-ambos","v-lista"); document.body.classList.add("v-"+m);
+  S.modo=m; if(recordar){ try{ localStorage.setItem("sp_modo",m); }catch(e){} }
+  document.querySelectorAll("#vistaBar [data-modo]").forEach(b=>b.classList.toggle("on",b.dataset.modo===m));
+  setTimeout(()=>map&&map.invalidateSize(),260);
+}
+function panelEstado(e){ setVista(MODOS[e]||e); }
+function panelEs(e){ return S.modo===(MODOS[e]||e); }
 
 /* ---------- Ejemplos (modo demo) ---------- */
 async function cargarEjemplos(){
@@ -1289,7 +1360,12 @@ async function inicio(){
   $("#btnBuscarDir").onclick=buscarDireccion;
   $("#qDir").onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); buscarDireccion(); } };
   $("#btnMiUbic").onclick=miUbicacion;
-  $("#asa").onclick=()=>panelEstado(panelEs("max")?"min":panelEs("min")?"mid":"max");
+  let modoIni="ambos"; try{ modoIni=localStorage.getItem("sp_modo")||"ambos"; }catch(e){}
+  if(PUBLICO) modoIni="ambos";
+  setVista(modoIni);
+  document.querySelectorAll("#vistaBar [data-modo]").forEach(b=>b.onclick=()=>{ if(S.pick) return; setVista(b.dataset.modo,true); });
+  const bc=$("#btnConfirmarUbic"), bx=$("#btnCancelarUbic");
+  if(bc) bc.onclick=confirmarUbicacion; if(bx) bx.onclick=cancelarUbicacion;
   document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{
     if(S.vista==="form") return toast("Termina o cancela el reporte primero");
     S.tab=b.dataset.tab; S.vista=S.tab; S.sel=null; capaMatch.clearLayers(); limpiarHash(); render();

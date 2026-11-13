@@ -236,3 +236,35 @@ body.adop #panel{width:100%;border-right:0}
 body.adop #vista{width:100%;max-width:900px;margin:0 auto}
 body.adop .tabs{max-width:900px;margin:0 auto;width:100%}
 @media (max-width: 820px){ body.adop #panel{height:100% !important;border-radius:0;box-shadow:none} body.adop #asa{display:none} }
+
+/* ---------- Modos de vista: mapa / mapa + lista / lista ---------- */
+#vistaBar{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 8px;background:#fff;border-bottom:1px solid var(--linea)}
+#vistaBar .agarre{display:none;width:44px;height:5px;border-radius:3px;background:#d8cab3}
+.modos{display:flex;gap:3px;background:#f3ead9;border-radius:11px;padding:3px}
+.modos button{border:0;background:none;padding:6px 11px;border-radius:9px;font-weight:700;color:var(--gris);font-size:13px;white-space:nowrap}
+.modos button.on{background:#fff;color:var(--cafe);box-shadow:0 1px 4px rgba(60,35,10,.15)}
+body.v-lista #map{display:none}
+body.v-lista #panel{width:100%;border-right:0}
+body.v-lista #vista, body.v-lista .tabs{width:100%;max-width:900px;margin:0 auto}
+body.v-mapa #panel{position:absolute;top:10px;left:56px;width:auto;height:auto;border-radius:14px;box-shadow:var(--sombra);border:0}
+body.v-mapa #panel .tabs, body.v-mapa #vista{display:none}
+body.v-mapa #vistaBar{border:0;border-radius:14px}
+body.adop #vistaBar{display:none}
+/* Paso de marcar ubicación: solo mapa + barra para confirmar */
+body.pick #panel{display:none}
+#barraConfirm{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:1200;background:#fff;border-radius:14px;box-shadow:var(--sombra);padding:10px 12px;display:none;flex-direction:column;gap:8px;align-items:stretch;width:min(520px,calc(100% - 20px));text-align:center;font-weight:600;color:var(--cafe)}
+#barraConfirm .acciones .btn{flex:1}
+.ubic.ok{background:#e9f6ee}
+/* Autocompletado */
+.auto{position:relative}
+.sugerencias{display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1.5px solid var(--linea);border-radius:10px;box-shadow:var(--sombra);max-height:230px;overflow:auto;margin-top:2px}
+.sugerencias div{padding:10px 12px;border-bottom:1px solid #f3ead9;font-size:15px;cursor:pointer}
+.sugerencias div:hover{background:#f6efe2}
+.sugerencias .otra{color:var(--azul);font-weight:600}
+@media (max-width: 820px){
+  #vistaBar .agarre{display:block}
+  #panel{height:46%}
+  body.v-lista #panel{height:100%;border-radius:0;box-shadow:none}
+  body.v-mapa #panel{left:0;right:0;top:auto;bottom:0;width:auto;border-radius:18px 18px 0 0}
+  .modos button{padding:7px 9px;font-size:12.5px}
+}
